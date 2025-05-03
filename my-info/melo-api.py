@@ -81,7 +81,8 @@ async def generate_tts(request: TTSRequest):
         print(f"Generating audio for text: {request.text[:50]}{'...' if len(request.text) > 50 else ''}")
         
         before_inference_time = time.time()
-        print(f"Time before inference: {time.strftime('%H:%M:%S.%f')[:-3]} ({(before_inference_time - start_time) * 1000:.2f} ms)")
+        elapsed_since_start = (before_inference_time - start_time) * 1000
+        print(f"Time before inference: {elapsed_since_start:.2f} ms since start")
         
         audio = model.tts_to_file(
             text=request.text,
@@ -95,7 +96,9 @@ async def generate_tts(request: TTSRequest):
         )
         
         after_inference_time = time.time()
-        print(f"Time after inference: {time.strftime('%H:%M:%S.%f')[:-3]} ({(after_inference_time - before_inference_time) * 1000:.2f} ms)")
+        elapsed_since_start = (after_inference_time - start_time) * 1000
+        elapsed_since_last = (after_inference_time - before_inference_time) * 1000
+        print(f"Time after inference: {elapsed_since_start:.2f} ms since start, {elapsed_since_last:.2f} ms since before inference")
         
         # Create in-memory file
         audio_io = io.BytesIO()
@@ -128,7 +131,9 @@ async def generate_tts(request: TTSRequest):
         audio_io.seek(0)
         
         first_byte_time = time.time()
-        print(f"Time to send first byte: {time.strftime('%H:%M:%S.%f')[:-3]} ({(first_byte_time - after_inference_time) * 1000:.2f} ms)")
+        elapsed_since_start = (first_byte_time - start_time) * 1000
+        elapsed_since_last = (first_byte_time - after_inference_time) * 1000
+        print(f"Time to send first byte: {elapsed_since_start:.2f} ms since start, {elapsed_since_last:.2f} ms since after inference")
         
         generation_time = time.time() - start_time
         print(f"Audio generated in {generation_time:.2f} seconds")
