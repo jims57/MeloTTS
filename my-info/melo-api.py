@@ -44,8 +44,39 @@ async def startup_event():
         print(f"GPU device name: {torch.cuda.get_device_name(0)}")
     print(f"Using device: {device}")
     
-    # Initialize models for different languages
-    languages = ["ZH", "EN"]
+    # Download required NLTK resources
+    import nltk
+    try:
+        print("Downloading required NLTK resources...")
+        nltk.download('averaged_perceptron_tagger')
+        nltk.download('punkt')
+        
+        # Add the specific resource needed for English
+        try:
+            nltk.download('averaged_perceptron_tagger_eng')
+        except:
+            # If the eng-specific version can't be downloaded directly
+            # Try to copy the regular one
+            import os
+            import shutil
+            nltk_data_path = nltk.data.path[0]
+            src_path = os.path.join(nltk_data_path, 'taggers', 'averaged_perceptron_tagger')
+            dst_path = os.path.join(nltk_data_path, 'taggers', 'averaged_perceptron_tagger_eng')
+            
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+            
+            # Copy if source exists
+            if os.path.exists(src_path):
+                print(f"Copying tagger from {src_path} to {dst_path}")
+                shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+        
+        print("NLTK resources downloaded successfully")
+    except Exception as e:
+        print(f"Error downloading NLTK resources: {e}")
+    
+    # Initialize models for all supported languages
+    languages = ["ZH", "EN", "ES", "FR", "JP", "KR"]
     for language in languages:
         print(f"Loading {language} model...")
         model = TTS(language=language, device=device)
@@ -61,8 +92,8 @@ async def generate_tts(request: TTSRequest):
     start_time = time.time()
     print(f"API start time: {time.strftime('%H:%M:%S.%f')[:-3]}")
     
-    # Get the appropriate model
-    language = request.language
+    # Get the appropriate model - convert language to uppercase
+    language = request.language.upper() if request.language else "ZH"
     if language not in global_models:
         raise HTTPException(status_code=400, detail=f"Language '{language}' not supported")
     
@@ -74,8 +105,12 @@ async def generate_tts(request: TTSRequest):
         if speaker_id not in model.hps.data.spk2id:
             # Use first available speaker if specified one doesn't exist
             speaker_id = list(model.hps.data.spk2id.values())[0]
+            print(f"Using fallback speaker_id: {speaker_id}")
         else:
             speaker_id = model.hps.data.spk2id[speaker_id]
+            print(f"Using requested speaker_id: {speaker_id}")
+        
+        print(f"Available speakers for {language}: {model.hps.data.spk2id}")
         
         # Generate audio
         print(f"Generating audio for text: {request.text[:50]}{'...' if len(request.text) > 50 else ''}")
@@ -84,16 +119,23 @@ async def generate_tts(request: TTSRequest):
         elapsed_since_start = (before_inference_time - start_time) * 1000
         print(f"Time before inference: {elapsed_since_start:.2f} ms since start")
         
-        audio = model.tts_to_file(
-            text=request.text,
-            speaker_id=speaker_id,
-            output_path=None,  # Don't save to file
-            sdp_ratio=request.sdp_ratio,
-            noise_scale=request.noise_scale,
-            noise_scale_w=request.noise_scale_w,
-            speed=request.speed,
-            quiet=True
-        )
+        try:
+            audio = model.tts_to_file(
+                text=request.text,
+                speaker_id=speaker_id,
+                output_path=None,  # Don't save to file
+                sdp_ratio=request.sdp_ratio,
+                noise_scale=request.noise_scale,
+                noise_scale_w=request.noise_scale_w,
+                speed=request.speed,
+                quiet=True
+            )
+        except Exception as inference_error:
+            print(f"Inference error: {str(inference_error)}")
+            print(f"Error type: {type(inference_error)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            raise
         
         after_inference_time = time.time()
         elapsed_since_start = (after_inference_time - start_time) * 1000
@@ -145,6 +187,9 @@ async def generate_tts(request: TTSRequest):
         )
     
     except Exception as e:
+        print(f"Error in generate_tts: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error generating audio: {str(e)}")
 
 if __name__ == "__main__":
