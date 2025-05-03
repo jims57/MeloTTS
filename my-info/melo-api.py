@@ -59,6 +59,7 @@ async def root():
 @app.post("/tts")
 async def generate_tts(request: TTSRequest):
     start_time = time.time()
+    print(f"API start time: {time.strftime('%H:%M:%S.%f')[:-3]}")
     
     # Get the appropriate model
     language = request.language
@@ -78,6 +79,10 @@ async def generate_tts(request: TTSRequest):
         
         # Generate audio
         print(f"Generating audio for text: {request.text[:50]}{'...' if len(request.text) > 50 else ''}")
+        
+        before_inference_time = time.time()
+        print(f"Time before inference: {time.strftime('%H:%M:%S.%f')[:-3]} ({(before_inference_time - start_time) * 1000:.2f} ms)")
+        
         audio = model.tts_to_file(
             text=request.text,
             speaker_id=speaker_id,
@@ -88,6 +93,9 @@ async def generate_tts(request: TTSRequest):
             speed=request.speed,
             quiet=True
         )
+        
+        after_inference_time = time.time()
+        print(f"Time after inference: {time.strftime('%H:%M:%S.%f')[:-3]} ({(after_inference_time - before_inference_time) * 1000:.2f} ms)")
         
         # Create in-memory file
         audio_io = io.BytesIO()
@@ -118,6 +126,9 @@ async def generate_tts(request: TTSRequest):
             raise HTTPException(status_code=400, detail=f"Unsupported audio format: {request.audio_format}")
         
         audio_io.seek(0)
+        
+        first_byte_time = time.time()
+        print(f"Time to send first byte: {time.strftime('%H:%M:%S.%f')[:-3]} ({(first_byte_time - after_inference_time) * 1000:.2f} ms)")
         
         generation_time = time.time() - start_time
         print(f"Audio generated in {generation_time:.2f} seconds")
