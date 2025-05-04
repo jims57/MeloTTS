@@ -1,11 +1,1 @@
-Language	Code	Speaker ID
-English (American)	EN	EN-US
-English (British)	EN	EN-BR
-English (Indian)	EN	EN_INDIA
-English (Australian)	EN	EN-AU
-English (Default)	EN	EN-Default
-Spanish	ES	ES
-French	FR	FR
-Chinese (mix EN)	ZH	ZH
-Japanese	JP	JP
-Korean	KR	KR
+supported_languages = ["ZH", "EN", "ES", "FR", "JP", "KR"]
