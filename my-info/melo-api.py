@@ -102,7 +102,10 @@ async def generate_tts(request: TTSRequest):
     try:
         # Get speaker ID
         speaker_id = request.speaker_id
-        if speaker_id not in model.hps.data.spk2id:
+        if language == "EN" and (speaker_id is None or speaker_id == "" or speaker_id not in model.hps.data.spk2id):
+            speaker_id = model.hps.data.spk2id["EN-Default"]
+            print(f"Using EN-Default speaker for English: {speaker_id}")
+        elif speaker_id not in model.hps.data.spk2id:
             # Use first available speaker if specified one doesn't exist
             speaker_id = list(model.hps.data.spk2id.values())[0]
             print(f"Using fallback speaker_id: {speaker_id}")
