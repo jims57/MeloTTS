@@ -157,7 +157,14 @@ async def generate_tts(request: TTSRequest):
             import soundfile as sf
             # First write as WAV to memory
             wav_io = io.BytesIO()
-            sf.write(wav_io, audio, model.hps.data.sampling_rate, format="WAV")
+            
+            # Normalize audio to increase volume before writing to MP3
+            volume_multiplier = 10.0  # Increase volume by factor of 4 (was 2.0)
+            normalized_audio = audio * volume_multiplier
+            # Clip to avoid distortion
+            normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
+            
+            sf.write(wav_io, normalized_audio, model.hps.data.sampling_rate, format="WAV")
             wav_io.seek(0)
             
             # Convert to MP3 using torchaudio
