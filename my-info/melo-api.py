@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import uvicorn
 import time
 from melo.api import TTS
+import os
 
 # API model for TTS request
 class TTSRequest(BaseModel):
@@ -44,36 +45,47 @@ async def startup_event():
         print(f"GPU device name: {torch.cuda.get_device_name(0)}")
     print(f"Using device: {device}")
     
-    # Download required NLTK resources
+    # Download required NLTK resources only if not already present
     import nltk
     try:
-        print("Downloading required NLTK resources...")
-        nltk.download('averaged_perceptron_tagger')
-        nltk.download('punkt')
+        print("Checking NLTK resources...")
+        nltk_data_path = nltk.data.path[0]
         
-        # Add the specific resource needed for English
-        try:
-            nltk.download('averaged_perceptron_tagger_eng')
-        except:
+        # Define the resources we need
+        resources = [
+            ('taggers/averaged_perceptron_tagger', 'averaged_perceptron_tagger'),
+            ('tokenizers/punkt', 'punkt'),
+            ('taggers/averaged_perceptron_tagger_eng', 'averaged_perceptron_tagger_eng')
+        ]
+        
+        # Check and download only missing resources
+        for resource_path, resource_name in resources:
+            full_path = os.path.join(nltk_data_path, resource_path)
+            if not os.path.exists(full_path):
+                print(f"Downloading missing NLTK resource: {resource_name}...")
+                nltk.download(resource_name)
+            else:
+                print(f"NLTK resource {resource_name} already present, skipping download")
+        
+        # Special handling for averaged_perceptron_tagger_eng if it's still missing
+        eng_tagger_path = os.path.join(nltk_data_path, 'taggers', 'averaged_perceptron_tagger_eng')
+        if not os.path.exists(eng_tagger_path):
             # If the eng-specific version can't be downloaded directly
             # Try to copy the regular one
-            import os
-            import shutil
-            nltk_data_path = nltk.data.path[0]
             src_path = os.path.join(nltk_data_path, 'taggers', 'averaged_perceptron_tagger')
-            dst_path = os.path.join(nltk_data_path, 'taggers', 'averaged_perceptron_tagger_eng')
             
             # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+            os.makedirs(os.path.dirname(eng_tagger_path), exist_ok=True)
             
             # Copy if source exists
             if os.path.exists(src_path):
-                print(f"Copying tagger from {src_path} to {dst_path}")
-                shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+                print(f"Copying tagger from {src_path} to {eng_tagger_path}")
+                import shutil
+                shutil.copytree(src_path, eng_tagger_path, dirs_exist_ok=True)
         
-        print("NLTK resources downloaded successfully")
+        print("NLTK resources check completed")
     except Exception as e:
-        print(f"Error downloading NLTK resources: {e}")
+        print(f"Error checking/downloading NLTK resources: {e}")
     
     # Initialize models for all supported languages
     languages = ["ZH", "EN", "ES", "FR", "JP", "KR"]
