@@ -20,20 +20,20 @@ else:
     print(f"Current device: {device}")
 
 # [Chinese]
-# text = "我最近在学习machine learning，希望能够在未来的artificial intelligence领域有所建树。"
-# model = TTS(language='ZH', device=device)
-# speaker_ids = model.hps.data.spk2id
+text = "我最近在学习machine learning，希望能够在未来的artificial intelligence领域有所建树。"
+model = TTS(language='ZH', device=device)
+speaker_ids = model.hps.data.spk2id
 
-# output_path = 'zh.wav'
-# model.tts_to_file(text, speaker_ids['ZH'], output_path, speed=speed)
+output_path = 'zh.wav'
+model.tts_to_file(text, speaker_ids['ZH'], output_path, speed=speed)
 
 # [English]
-text = "The sun sets behind the mountains, casting long shadows across the valley."
-model = TTS(language='EN', device=device)
-speaker_ids = model.hps.data.spk2id
-output_path = 'en.wav'
+# text = "The sun sets behind the mountains, casting long shadows across the valley."
+# model = TTS(language='EN', device=device)
+# speaker_ids = model.hps.data.spk2id
+# output_path = 'en.wav'
 
-model.tts_to_file(text, speaker_ids['EN-US'], output_path, speed=speed) #[work, but Chinese accent]
+# model.tts_to_file(text, speaker_ids['EN-US'], output_path, speed=speed) #[work, but Chinese accent]
 # # model.tts_to_file(text, speaker_ids['EN-BR'], output_path, speed=speed) # [work]
 # # model.tts_to_file(text, speaker_ids['EN_INDIA'], output_path, speed=speed) # [work, but Indian accent]
 # # model.tts_to_file(text, speaker_ids['EN-AU'], output_path, speed=speed) # [work]
