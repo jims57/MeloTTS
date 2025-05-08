@@ -20,7 +20,8 @@ else:
     print(f"Current device: {device}")
 
 # [Chinese]
-text = "我最近在学习machine learning，希望能够在未来的artificial intelligence领域有所建树。"
+# text = "我最近在学习machine learning，希望能够在未来的artificial intelligence领域有所建树。"
+text = "你叫什么名字?"
 model = TTS(language='ZH', device=device)
 speaker_ids = model.hps.data.spk2id
 
