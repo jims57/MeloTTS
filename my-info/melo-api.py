@@ -186,6 +186,10 @@ async def generate_tts(request: TTSRequest):
             # First write as WAV to memory
             wav_io = io.BytesIO()
             
+            # Check if audio is valid
+            if len(audio) == 0 or np.isnan(audio).any():
+                raise HTTPException(status_code=500, detail="Generated audio is invalid or empty")
+            
             # Normalize audio to increase volume before writing to MP3
             volume_multiplier = 2.0  # Increase volume by factor of 4 (was 2.0)
             normalized_audio = audio * volume_multiplier
@@ -195,16 +199,31 @@ async def generate_tts(request: TTSRequest):
             sf.write(wav_io, normalized_audio, model.hps.data.sampling_rate, format="WAV")
             wav_io.seek(0)
             
-            # Convert to MP3 using torchaudio
-            import torchaudio
-            waveform, sample_rate = torchaudio.load(wav_io)
-            
-            # Convert to MP3
-            mp3_io = io.BytesIO()
-            torchaudio.save(mp3_io, waveform, sample_rate, format="mp3")
-            audio_io = mp3_io
-            media_type = "audio/mpeg"
-            filename = "output.mp3"
+            # Try MP3 conversion up to 3 times
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                try:
+                    # Convert to MP3 using torchaudio
+                    import torchaudio
+                    waveform, sample_rate = torchaudio.load(wav_io)
+                    
+                    # Convert to MP3
+                    mp3_io = io.BytesIO()
+                    torchaudio.save(mp3_io, waveform, sample_rate, format="mp3")
+                    audio_io = mp3_io
+                    media_type = "audio/mpeg"
+                    filename = "output.mp3"
+                    break  # Success, exit the retry loop
+                except RuntimeError as e:
+                    print(f"MP3 conversion attempt {attempt+1}/{max_attempts} failed: {str(e)}")
+                    if attempt < max_attempts - 1:
+                        # Reset WAV IO for next attempt
+                        wav_io.seek(0)
+                    else:
+                        # All attempts failed, raise an appropriate error
+                        print(f"All MP3 conversion attempts failed")
+                        raise HTTPException(status_code=500, detail="Failed to generate MP3 audio after multiple attempts")
+            # After the loop, audio_io will contain the MP3 data if conversion succeeded
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported audio format: {request.audio_format}")
         
