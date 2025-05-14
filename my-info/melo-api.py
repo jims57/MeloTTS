@@ -191,7 +191,11 @@ async def generate_tts(request: TTSRequest):
                 raise HTTPException(status_code=500, detail="Generated audio is invalid or empty")
             
             # Normalize audio to increase volume before writing to MP3
-            volume_multiplier = 2.0  # Increase volume by factor of 4 (was 2.0)
+            volume_multiplier = 2.0
+            # Apply higher volume for Chinese language MP3
+            if language == "ZH":
+                volume_multiplier = 8.0  # Higher volume for Chinese language MP3
+                
             normalized_audio = audio * volume_multiplier
             # Clip to avoid distortion
             normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
