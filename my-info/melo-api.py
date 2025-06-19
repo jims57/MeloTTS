@@ -194,7 +194,7 @@ async def generate_tts(request: TTSRequest):
             volume_multiplier = 2.0
             # Apply higher volume for Chinese language MP3
             if language == "ZH":
-                volume_multiplier = 8.0  # Higher volume for Chinese language MP3
+                volume_multiplier = 8.47  # Equivalent to 13dB increase
                 
             # Log volume multiplier value
             print(f"Volume multiplier: {volume_multiplier:.1f}")

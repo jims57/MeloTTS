@@ -8,7 +8,7 @@ from IPython.display import Audio, display
 # Increase the volume of the MP3 file
 input_mp3 = "/content/1748953736971-melo-1.mp3"
 output_mp3_louder = "/content/1748953736971-melo-1_louder.mp3"
-volume_increase_db = 12  # Adjust this value for the desired volume increase (in decibels)
+volume_increase_db = 13  # Adjust this value for the desired volume increase (in decibels)
 
 # Delete the old converted MP3 file if it exists
 if os.path.exists(output_mp3_louder):
