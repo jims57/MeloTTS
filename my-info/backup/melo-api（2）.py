@@ -190,15 +190,20 @@ async def generate_tts(request: TTSRequest):
             if len(audio) == 0 or np.isnan(audio).any():
                 raise HTTPException(status_code=500, detail="Generated audio is invalid or empty")
             
-            # Normalize audio to increase volume before writing to MP3
-            volume_multiplier = 12.6  # Equivalent to 22dB increase for outdoor use
+            # Apply noise gate to remove low-level noise
+            noise_threshold = 0.01  # Anything below this is considered noise
+            gated_audio = np.where(np.abs(audio) < noise_threshold, 0, audio)
+            
+            # Apply 2x volume increase for Chinese TTS
+            volume_multiplier = 2.0
+            if language == "ZH":
+                volume_multiplier = 8.0  # 2x increase for Chinese
                 
-            # Log volume multiplier value
             print(f"Volume multiplier: {volume_multiplier:.1f}")
-                
-            normalized_audio = audio * volume_multiplier
-            # Clip to avoid distortion
-            normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
+            normalized_audio = gated_audio * volume_multiplier
+            
+            # Simple peak limiting to prevent clipping
+            normalized_audio = np.clip(normalized_audio, -0.95, 0.95)
             
             sf.write(wav_io, normalized_audio, model.hps.data.sampling_rate, format="WAV")
             wav_io.seek(0)

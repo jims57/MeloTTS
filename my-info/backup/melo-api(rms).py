@@ -190,15 +190,31 @@ async def generate_tts(request: TTSRequest):
             if len(audio) == 0 or np.isnan(audio).any():
                 raise HTTPException(status_code=500, detail="Generated audio is invalid or empty")
             
-            # Normalize audio to increase volume before writing to MP3
-            volume_multiplier = 12.6  # Equivalent to 22dB increase for outdoor use
+            # Apply bandpass filtering to remove non-voice frequencies
+            import torchaudio
+            waveform = torch.from_numpy(audio).float().unsqueeze(0)
+            waveform = torchaudio.functional.highpass_biquad(
+                waveform, 
+                sample_rate=model.hps.data.sampling_rate, 
+                cutoff_freq=80.0
+            )
+            waveform = torchaudio.functional.lowpass_biquad(
+                waveform, 
+                sample_rate=model.hps.data.sampling_rate, 
+                cutoff_freq=8000.0
+            )
+            filtered_audio = waveform.squeeze(0).numpy()
+            
+            # Apply 2x volume increase for Chinese TTS
+            volume_multiplier = 2.0
+            if language == "ZH":
+                volume_multiplier = 6.0  # 3x increase for Chinese
                 
-            # Log volume multiplier value
             print(f"Volume multiplier: {volume_multiplier:.1f}")
-                
-            normalized_audio = audio * volume_multiplier
-            # Clip to avoid distortion
-            normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
+            normalized_audio = filtered_audio * volume_multiplier
+            
+            # Simple peak limiting to prevent clipping
+            normalized_audio = np.clip(normalized_audio, -0.95, 0.95)
             
             sf.write(wav_io, normalized_audio, model.hps.data.sampling_rate, format="WAV")
             wav_io.seek(0)

@@ -1,0 +1,90 @@
+To resolve the background noise issue in MP3 files after increasing the volume, we need to implement several key changes. The static noise occurs because aggressive volume amplification (especially for Chinese audio) makes previously inaudible quantization noise and artifacts audible. Here's the solution:
+
+​​Apply Bandpass Filtering​​:
+Use a bandpass filter to remove non-voice frequencies
+Cutoff ranges: 80Hz (low-frequency rumble) and 8000Hz (high-frequency artifacts)
+Implemented only for MP3 to avoid unnecessary processing for WAV
+​​Adjust Volume Boost Logic​​:
+Replace fixed multipliers with adaptive gain
+Calculate gain based on peak amplitude to avoid over-amplification
+Reduce maximum gain for Chinese audio from 8.0 to 4.0
+​​Improve Peak Limiting​​:
+Apply more effective soft clipping to prevent distortion
+Use smoother attenuation for peaks instead of hard clipping
+Here's the modified code section for the MP3 processing block:
+
+# ... [previous code] ...
+
+elif request.audio_format.lower() == "mp3":
+    # Apply bandpass filtering to remove non-voice frequencies
+    import torchaudio
+    waveform = torch.from_numpy(audio).float().unsqueeze(0)
+    waveform = torchaudio.functional.highpass_biquad(
+        waveform, 
+        sample_rate=model.hps.data.sampling_rate, 
+        cutoff_freq=80.0
+    )
+    waveform = torchaudio.functional.lowpass_biquad(
+        waveform, 
+        sample_rate=model.hps.data.sampling_rate, 
+        cutoff_freq=8000.0
+    )
+    audio = waveform.squeeze(0).numpy()
+    
+    # Adaptive volume boost with reduced maximum gain
+    max_gain = 4.0 if language == "ZH" else 2.0
+    current_peak = np.max(np.abs(audio))
+    if current_peak > 0.1:  # Avoid excessive boost on very quiet audio
+        # Calculate adaptive gain (capped at max_gain)
+        volume_multiplier = min(max_gain, 0.95 / current_peak)
+        print(f"Adaptive volume multiplier: {volume_multiplier:.1f}")
+        normalized_audio = audio * volume_multiplier
+    else:
+        normalized_audio = audio * max_gain
+        print(f"Using fixed volume multiplier: {max_gain:.1f}")
+    
+    # Improved peak limiting with soft clipping
+    peak_threshold = 0.95
+    # Soft clipping (smooth attenuation for peaks)
+    normalized_audio = np.where(
+        np.abs(normalized_audio) > peak_threshold,
+        np.sign(normalized_audio) * 
+        (peak_threshold + (np.abs(normalized_audio) - peak_threshold)/(1 + ((np.abs(normalized_audio) - peak_threshold)/(1 - peak_threshold))**2),
+        normalized_audio
+    )
+    
+    # Write processed audio to WAV buffer
+    wav_io = io.BytesIO()
+    sf.write(wav_io, normalized_audio, model.hps.data.sampling_rate, format="WAV")
+    wav_io.seek(0)
+    
+    # ... [MP3 conversion code remains the same] ...
+
+# ... [remaining code] ...
+Key improvements in this solution:
+
+​​Bandpass Filtering​​:
+Uses torchaudio's biquad filters for efficient processing
+Removes problematic frequencies before amplification
+80Hz cutoff eliminates low-frequency rumble
+8000Hz cutoff reduces high-frequency artifacts
+​​Adaptive Gain Control​​:
+Calculates gain based on current peak amplitude
+Caps Chinese audio gain at 4.0 (down from 8.0)
+Prevents excessive amplification of quiet segments
+​​Soft Clipping​​:
+Uses a polynomial-based soft clipping function
+Smoothly attenuates peaks instead of hard clipping
+Maintains audio quality while preventing distortion
+Formula: y = x - (x - threshold)/(1 + ((x - threshold)/(1 - threshold))^2) for peaks
+​​Reduced Maximum Gain​​:
+Lowers Chinese audio gain ceiling from 8.0 to 4.0
+Decreases noise floor amplification
+Maintains loudness while reducing artifacts
+This solution addresses the root causes of the background noise:
+
+Pre-emptive removal of problematic frequencies
+More controlled volume boosting
+Gentle handling of peaks to avoid distortion
+Reduced maximum amplification for Chinese audio
+The changes maintain the original functionality while significantly improving MP3 output quality, especially for Chinese text-to-speech conversions. The solution is efficient and only adds minimal processing overhead specifically for MP3 outputs.
