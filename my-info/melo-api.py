@@ -191,7 +191,10 @@ async def generate_tts(request: TTSRequest):
                 raise HTTPException(status_code=500, detail="Generated audio is invalid or empty")
             
             # Normalize audio to increase volume before writing to MP3
-            volume_multiplier = 12.6  # Equivalent to 22dB increase for outdoor use
+            volume_multiplier = 2.0
+            # Apply higher volume for Chinese language MP3
+            if language == "ZH":
+                volume_multiplier = 8.47  # Equivalent to 13dB increase
                 
             # Log volume multiplier value
             print(f"Volume multiplier: {volume_multiplier:.1f}")
