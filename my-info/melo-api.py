@@ -124,13 +124,53 @@ async def websocket_tts(websocket: WebSocket):
             save_audio_files = request_data.get("saveAudioFiles", False)
             output_sample_rate = request_data.get("outputSampleRate", 22050)
             audio_format = request_data.get("audioFormat", "mp3")  # pcm or mp3
+            language = request_data.get("language", "ZH")  # Extract language from JSON
             
             if not text:
                 await websocket.send_text(json.dumps({"error": "Text is required"}))
                 continue
             
-            # Get the appropriate model - convert language to uppercase
-            language = request_data.get("language", "ZH").upper()
+            # Handle new English language codes and speaker mapping like coqui-api.py
+            english_variants = ["en-au", "en-hk", "en-sg", "en-in", "en-us", "en-gb"]
+            original_language = language.lower()
+            
+            # Map for MeloTTS speaker IDs based on language variants
+            melo_speaker_id_map = {
+                "en": 4,            # EN-Default (American accent) for default English
+                "en-au": 3,         # EN-AU
+                "en-hk": 0,         # EN-US (Chinese accent)
+                "en-sg": 0,         # EN-US (Chinese accent)
+                "en-in": 2,         # EN_INDIA
+                "en-us": 4,         # EN-Default (American accent)
+                "en-gb": 1          # EN-BR
+            }
+            
+            # Default MeloTTS speaker ID if not in map
+            melo_speaker_id = 0
+            
+            # Handle "zh" language code - convert it to "zh-cn" then to "ZH"
+            if original_language == "zh":
+                original_language = "zh-cn"
+                print("Converted language code 'zh' to 'zh-cn'")
+            
+            # Check if it's an English variant or standard English
+            if original_language in english_variants or original_language == "en":
+                # Map the language variant to appropriate MeloTTS speaker ID
+                melo_speaker_id = melo_speaker_id_map.get(original_language, 4)  # Default to EN-Default (4) if not in map
+                # For MeloTTS, use uppercase "EN" for language
+                language = "EN"
+                # Override the speakerId with the mapped speaker ID
+                speaker_id = melo_speaker_id
+                print(f"Converted language '{original_language}' to '{language}' for TTS processing")
+                print(f"Using MeloTTS speaker ID: {melo_speaker_id} for {original_language}")
+            elif original_language == "zh-cn":
+                language = "ZH"
+                print(f"Converted language '{original_language}' to '{language}' for TTS processing")
+            else:
+                # For other languages, convert to uppercase
+                language = original_language.upper()
+            
+            # Get the appropriate model - language is now properly processed
             if language not in global_models:
                 await websocket.send_text(json.dumps({"error": f"Language '{language}' not supported"}))
                 continue
