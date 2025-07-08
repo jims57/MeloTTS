@@ -1,0 +1,19 @@
+Volume multiplier: 8.5
+[WS-TTS] Saved chunk_1.pcm (16000 bytes)
+[WS-TTS] 📦 PCM chunk 1 sent: 16000 bytes, time: 0.18ms
+Volume multiplier: 8.5
+[WS-TTS] Saved chunk_2.pcm (16000 bytes)
+[WS-TTS] 📦 PCM chunk 2 sent: 16000 bytes, time: 0.19ms
+Volume multiplier: 8.5
+[WS-TTS] Saved chunk_3.pcm (10758 bytes)
+[WS-TTS] 📦 PCM chunk 3 sent: 10758 bytes, time: 0.18ms
+[WS-TTS] 🏁 Audio streaming completed in 0.13 seconds
+[WS-TTS] Total chunks sent: 4
+[WS-TTS] 📋 REQUEST SUMMARY:
+[WS-TTS] 📋   Audio Format: pcm
+[WS-TTS] 📋   Sample Rate: 8000 Hz
+[WS-TTS] 📋   Speaker ID: 1
+[WS-TTS] 📋   Total Generation Time: 0.13s
+[WS-TTS] 📋   First Chunk Generated Time: 124.77ms
+[WS-TTS] 📋   First Chunk Since Request: 124.97ms
+[WS-TTS] 📋   First Chunk Sent Since Request: 127.02ms

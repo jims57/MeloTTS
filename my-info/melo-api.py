@@ -180,10 +180,21 @@ async def websocket_tts(websocket: WebSocket):
                 
                 before_inference_time = time.time()
                 elapsed_since_start = (before_inference_time - start_time) * 1000
+                print(f"[WS-TTS] 📊 Pre-processing time: {elapsed_since_start:.2f}ms")
                 print(f"Time before inference: {elapsed_since_start:.2f} ms since start")
+                
+                # Add timing variables for first chunk tracking
+                first_chunk_generated = False
+                first_chunk_sent = False
+                first_chunk_time = None
+                first_chunk_since_request = None
+                first_chunk_sent_since_request = None
                 
                 try:
                     # Generate full audio first
+                    inference_start_time = time.time()
+                    print(f"[WS-TTS] 🚀 Starting inference at: {time.strftime('%H:%M:%S.%f')[:-3]}")
+                    
                     audio = model.tts_to_file(
                         text=text,
                         speaker_id=speaker_id,
@@ -194,6 +205,16 @@ async def websocket_tts(websocket: WebSocket):
                         speed=request_data.get("speed", 1.0),
                         quiet=True
                     )
+                    
+                    # Record first chunk timing immediately after inference
+                    if not first_chunk_generated:
+                        chunk_start_time = time.time()
+                        first_chunk_time = (chunk_start_time - inference_start_time) * 1000
+                        first_chunk_since_request = (chunk_start_time - start_time) * 1000
+                        print(f"[WS-TTS] ⚡ First chunk generated time: {first_chunk_time:.2f}ms")
+                        print(f"[WS-TTS] ⚡ First chunk since request arrival: {first_chunk_since_request:.2f}ms")
+                        first_chunk_generated = True
+                        
                 except Exception as inference_error:
                     print(f"Inference error: {str(inference_error)}")
                     print(f"Error type: {type(inference_error)}")
@@ -218,9 +239,9 @@ async def websocket_tts(websocket: WebSocket):
                     )
                     audio = audio_tensor.squeeze(0).numpy()
                     resample_time = (time.time() - resample_start) * 1000
-                    print(f"[WS-TTS] Resampled audio: {resample_time:.2f}ms ({model.hps.data.sampling_rate} → {output_sample_rate} Hz)")
+                    print(f"[WS-TTS] 🔄 Resampled audio: {resample_time:.2f}ms ({model.hps.data.sampling_rate} → {output_sample_rate} Hz)")
                 else:
-                    print(f"[WS-TTS] No resampling needed (optimal)")
+                    print(f"[WS-TTS] ✓ No resampling needed (optimal)")
                 
                 # Stream audio in chunks
                 chunk_duration = 1.0  # 1 second chunks
@@ -263,6 +284,13 @@ async def websocket_tts(websocket: WebSocket):
                         # Send PCM chunk
                         await websocket.send_bytes(pcm_data)
                         
+                        # Track first chunk sent timing
+                        if not first_chunk_sent:
+                            first_chunk_sent_time = time.time()
+                            first_chunk_sent_since_request = (first_chunk_sent_time - start_time) * 1000
+                            print(f"[WS-TTS] 🎯 First chunk sent since request: {first_chunk_sent_since_request:.2f}ms")
+                            first_chunk_sent = True
+                        
                         # Save PCM chunk if requested
                         if save_audio_files and chunk_save_folder:
                             chunk_filename = f"chunk_{chunk_counter}.pcm"
@@ -275,13 +303,11 @@ async def websocket_tts(websocket: WebSocket):
                                 print(f"[WS-TTS] Error saving chunk file: {save_error}")
                         
                         chunk_processing_time = (time.time() - chunk_start_time) * 1000
-                        print(f"[WS-TTS] PCM chunk {chunk_counter} sent: {len(pcm_data)} bytes, time: {chunk_processing_time:.2f}ms")
+                        print(f"[WS-TTS] 📦 PCM chunk {chunk_counter} sent: {len(pcm_data)} bytes, time: {chunk_processing_time:.2f}ms")
                         
                     elif audio_format.lower() == "mp3":
-                        # Convert chunk to MP3 using enhanced method from cosy-api.py
+                        # Convert chunk to MP3 with fallback when FFmpeg is not available
                         import soundfile as sf
-                        # First write as WAV to memory
-                        wav_io = io.BytesIO()
                         
                         # Check if audio is valid
                         if len(audio_chunk) == 0 or np.isnan(audio_chunk).any():
@@ -300,12 +326,16 @@ async def websocket_tts(websocket: WebSocket):
                         # Clip to avoid distortion
                         normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
                         
-                        sf.write(wav_io, normalized_audio, output_sample_rate, format="WAV")
-                        wav_io.seek(0)
-                        
-                        # Convert to MP3 using FFmpeg (enhanced method from cosy-api.py)
+                        # Try FFmpeg first, fallback to soundfile if FFmpeg not available
+                        mp3_data = None
                         try:
                             import subprocess
+                            import shutil
+                            
+                            # Check if ffmpeg is available
+                            if shutil.which('ffmpeg') is None:
+                                raise FileNotFoundError("FFmpeg not found")
+                            
                             # Use FFmpeg to convert WAV to MP3 with optimized settings
                             process = subprocess.Popen(
                                 [
@@ -336,13 +366,37 @@ async def websocket_tts(websocket: WebSocket):
                             
                             if process.returncode != 0:
                                 print(f"FFmpeg error: {error.decode()}")
+                                raise Exception("FFmpeg conversion failed")
+                            
+                            # Trim MP3 padding for smoother playback
+                            mp3_data = trim_mp3_padding(mp3_data)
+                            print(f"[WS-TTS] MP3 conversion via FFmpeg successful")
+                            
+                        except Exception as ffmpeg_error:
+                            print(f"[WS-TTS] FFmpeg conversion failed: {str(ffmpeg_error)}")
+                            print(f"[WS-TTS] Falling back to WAV format for chunk {chunk_counter}")
+                            
+                            # Fallback: send as WAV format
+                            try:
+                                wav_io = io.BytesIO()
+                                sf.write(wav_io, normalized_audio, output_sample_rate, format="WAV")
+                                mp3_data = wav_io.getvalue()
+                                wav_io.close()
+                                print(f"[WS-TTS] WAV fallback conversion successful")
+                            except Exception as wav_error:
+                                print(f"[WS-TTS] WAV fallback also failed: {str(wav_error)}")
                                 continue
+                        
+                        if mp3_data:
+                            # Send MP3/WAV chunk
+                            await websocket.send_bytes(mp3_data)
                             
-                            # Trim MP3 padding for smoother playback (method from cosy-api.py)
-                            trimmed_mp3_data = trim_mp3_padding(mp3_data)
-                            
-                            # Send MP3 chunk
-                            await websocket.send_bytes(trimmed_mp3_data)
+                            # Track first chunk sent timing
+                            if not first_chunk_sent:
+                                first_chunk_sent_time = time.time()
+                                first_chunk_sent_since_request = (first_chunk_sent_time - start_time) * 1000
+                                print(f"[WS-TTS] 🎯 First chunk sent since request: {first_chunk_sent_since_request:.2f}ms")
+                                first_chunk_sent = True
                             
                             # Save MP3 chunk if requested
                             if save_audio_files and chunk_save_folder:
@@ -350,17 +404,14 @@ async def websocket_tts(websocket: WebSocket):
                                 chunk_filepath = os.path.join(chunk_save_folder, chunk_filename)
                                 try:
                                     with open(chunk_filepath, 'wb') as f:
-                                        f.write(trimmed_mp3_data)
-                                    print(f"[WS-TTS] Saved {chunk_filename} ({len(trimmed_mp3_data)} bytes)")
+                                        f.write(mp3_data)
+                                    print(f"[WS-TTS] Saved {chunk_filename} ({len(mp3_data)} bytes)")
                                 except Exception as save_error:
                                     print(f"[WS-TTS] Error saving chunk file: {save_error}")
                             
                             chunk_processing_time = (time.time() - chunk_start_time) * 1000
-                            print(f"[WS-TTS] MP3 chunk {chunk_counter} sent: {len(trimmed_mp3_data)} bytes, time: {chunk_processing_time:.2f}ms")
-                            
-                        except Exception as e:
-                            print(f"Enhanced MP3 conversion failed for chunk {chunk_counter}: {str(e)}")
-                            continue
+                            print(f"[WS-TTS] 📦 MP3 chunk {chunk_counter} sent: {len(mp3_data)} bytes, time: {chunk_processing_time:.2f}ms")
+                        
                     else:
                         await websocket.send_text(json.dumps({"error": f"Unsupported audio format: {audio_format}"}))
                         break
@@ -370,8 +421,24 @@ async def websocket_tts(websocket: WebSocket):
                 
                 # Log completion
                 generation_time = time.time() - start_time
-                print(f"[WS-TTS] Audio streaming completed in {generation_time:.2f} seconds")
+                print(f"[WS-TTS] 🏁 Audio streaming completed in {generation_time:.2f} seconds")
                 print(f"[WS-TTS] Total chunks sent: {chunk_counter}")
+                
+                # === REQUEST SUMMARY (like cosy-api.py) ===
+                print(f"[WS-TTS] 📋 REQUEST SUMMARY:")
+                print(f"[WS-TTS] 📋   Audio Format: {audio_format}")
+                print(f"[WS-TTS] 📋   Sample Rate: {output_sample_rate} Hz")
+                print(f"[WS-TTS] 📋   Speaker ID: {speaker_id}")
+                print(f"[WS-TTS] 📋   Total Generation Time: {generation_time:.2f}s")
+                
+                # Add first chunk timing summary
+                if first_chunk_generated:
+                    print(f"[WS-TTS] 📋   First Chunk Generated Time: {first_chunk_time:.2f}ms")
+                    print(f"[WS-TTS] 📋   First Chunk Since Request: {first_chunk_since_request:.2f}ms")
+                    if first_chunk_sent_since_request is not None:
+                        print(f"[WS-TTS] 📋   First Chunk Sent Since Request: {first_chunk_sent_since_request:.2f}ms")
+                else:
+                    print(f"[WS-TTS] 📋   First Chunk: Not generated")
                 
                 # Send an empty chunk to signal completion
                 await websocket.send_bytes(b'')
@@ -386,6 +453,64 @@ async def websocket_tts(websocket: WebSocket):
         print("[WS-TTS] WebSocket connection disconnected")
     except Exception as e:
         print(f"[WS-TTS] WebSocket error: {str(e)}")
+
+def trim_mp3_padding(mp3_data):
+    """Remove padding bytes from the end of MP3 chunk to ensure clean frame boundaries"""
+    if len(mp3_data) < 4:
+        return mp3_data
+    
+    # Convert to bytearray for easier manipulation
+    data = bytearray(mp3_data)
+    original_length = len(data)
+    
+    # Look for repetitive padding patterns at the end
+    # Common MP3 padding patterns: 0x55, 0xAA, 0x00, etc.
+    padding_patterns = [0x55, 0xAA, 0x00]
+    
+    # Find the last non-padding byte
+    end_pos = len(data)
+    
+    for pattern in padding_patterns:
+        # Check if we have repetitive padding pattern at the end
+        consecutive_count = 0
+        pos = len(data) - 1
+        
+        # Count consecutive padding bytes from the end
+        while pos >= 0 and data[pos] == pattern:
+            consecutive_count += 1
+            pos -= 1
+        
+        # If we found significant padding (more than 16 consecutive bytes)
+        if consecutive_count > 16:
+            potential_end = pos + 1
+            if potential_end < end_pos:
+                end_pos = potential_end
+                print(f"[WS-TTS] Detected {consecutive_count} bytes of 0x{pattern:02X} padding, trimming to position {end_pos}")
+    
+    # Additional check: look for MP3 frame sync patterns to avoid cutting in the middle of frames
+    # MP3 frame sync is 0xFFF (first 11 bits), so we look for 0xFF followed by 0xF*
+    if end_pos < original_length:
+        # Try to align to the last valid MP3 frame boundary
+        for i in range(end_pos - 1, max(0, end_pos - 100), -1):  # Look back up to 100 bytes
+            if i + 1 < len(data) and data[i] == 0xFF and (data[i + 1] & 0xF0) == 0xF0:
+                # Found potential MP3 frame sync, this might be a better cut point
+                # Look for the end of this frame
+                frame_start = i
+                # MP3 frame header is 4 bytes, try to find frame length
+                if frame_start + 4 <= len(data):
+                    # For now, just cut here as it's a frame boundary
+                    end_pos = min(end_pos, frame_start + 4)
+                    print(f"[WS-TTS] Aligned to MP3 frame boundary at position {end_pos}")
+                    break
+    
+    # Trim the data
+    trimmed_data = bytes(data[:end_pos])
+    
+    if end_pos < original_length:
+        bytes_removed = original_length - end_pos
+        print(f"[WS-TTS] Trimmed {bytes_removed} padding bytes from MP3 chunk ({original_length} -> {end_pos} bytes)")
+    
+    return trimmed_data
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MeloTTS API Server')

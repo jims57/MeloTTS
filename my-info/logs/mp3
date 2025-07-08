@@ -1,0 +1,22 @@
+Volume multiplier: 8.5
+[WS-TTS] Detected 131 bytes of 0xAA padding, trimming to position 3829
+[WS-TTS] Trimmed 131 padding bytes from MP3 chunk (3960 -> 3829 bytes)
+[WS-TTS] MP3 conversion via FFmpeg successful
+[WS-TTS] Saved chunk_2.mp3 (3829 bytes)
+[WS-TTS] 📦 MP3 chunk 2 sent: 3829 bytes, time: 50.08ms
+Volume multiplier: 8.5
+[WS-TTS] Detected 59 bytes of 0x55 padding, trimming to position 2389
+[WS-TTS] Trimmed 59 padding bytes from MP3 chunk (2448 -> 2389 bytes)
+[WS-TTS] MP3 conversion via FFmpeg successful
+[WS-TTS] Saved chunk_3.mp3 (2389 bytes)
+[WS-TTS] 📦 MP3 chunk 3 sent: 2389 bytes, time: 60.66ms
+[WS-TTS] 🏁 Audio streaming completed in 0.28 seconds
+[WS-TTS] Total chunks sent: 4
+[WS-TTS] 📋 REQUEST SUMMARY:
+[WS-TTS] 📋   Audio Format: mp3
+[WS-TTS] 📋   Sample Rate: 8000 Hz
+[WS-TTS] 📋   Speaker ID: 1
+[WS-TTS] 📋   Total Generation Time: 0.28s
+[WS-TTS] 📋   First Chunk Generated Time: 86.33ms
+[WS-TTS] 📋   First Chunk Since Request: 86.54ms
+[WS-TTS] 📋   First Chunk Sent Since Request: 128.98ms

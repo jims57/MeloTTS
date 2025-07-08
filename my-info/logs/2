@@ -1,0 +1,12 @@
+Time after inference: 119.18 ms since start, 119.00 ms since before inference
+[WS-TTS] Resampled audio: 1.68ms (44100 → 8000 Hz)
+[WS-TTS] Streaming audio format: mp3
+[WS-TTS] Audio length: 29472 samples, chunk size: 8000 samples
+Volume multiplier: 8.5
+Enhanced MP3 conversion failed for chunk 0: [Errno 2] No such file or directory: 'ffmpeg'
+Volume multiplier: 8.5
+Enhanced MP3 conversion failed for chunk 0: [Errno 2] No such file or directory: 'ffmpeg'
+Volume multiplier: 8.5
+Enhanced MP3 conversion failed for chunk 0: [Errno 2] No such file or directory: 'ffmpeg'
+Volume multiplier: 8.5
+Enhanced MP3 conversion failed for chunk 0: [Errno 2] No such file or directory: 'ffmpeg'
