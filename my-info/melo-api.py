@@ -137,6 +137,75 @@ async def websocket_tts(websocket: WebSocket):
             
             model = global_models[language]
             
+            # Define punctuation markers for all supported MeloTTS languages
+            punctuation_markers = [
+                # English
+                '.', '!', '?', ';', ',', ':',
+                # Spanish
+                '¡', '¿',
+                # French
+                '«', '»',
+                # Chinese
+                '。', '！', '？', '；', '，', '：', '、',
+                # Japanese  
+                # Korean (uses mostly English punctuation)
+            ]
+            
+            # Function to split text by punctuation while keeping the punctuation
+            def split_by_punctuation(text):
+                segments = []
+                current_segment = ""
+                
+                for char in text:
+                    current_segment += char
+                    if char in punctuation_markers:
+                        if current_segment.strip():  # Only add non-empty segments
+                            segments.append(current_segment.strip())
+                        current_segment = ""
+                
+                # Add any remaining text
+                if current_segment.strip():
+                    segments.append(current_segment.strip())
+                
+                # If we have no splits (no punctuation in text), use the whole text
+                if not segments:
+                    segments = [text]
+                
+                # For Chinese text, ensure first segment isn't too long for fast response
+                if language == "ZH" and segments and len(segments[0]) > 25:
+                    # Extract a shorter first segment if it's Chinese and too long
+                    # This helps get the first audio chunk to the client faster
+                    first_part = segments[0][:25]
+                    rest_part = segments[0][25:]
+                    segments[0] = first_part
+                    # Only insert the rest if it's not empty
+                    if rest_part.strip():
+                        segments.insert(1, rest_part)
+                
+                # Combine very short segments with the next segment for better quality
+                combined_segments = []
+                current_combined = ""
+                
+                for segment in segments:
+                    # If current segment is short (less than 5 chars) or current_combined is empty
+                    if len(segment) < 5 or not current_combined:
+                        current_combined += " " + segment if current_combined else segment
+                    else:
+                        combined_segments.append(current_combined)
+                        current_combined = segment
+                
+                # Add the last combined segment if it exists
+                if current_combined:
+                    combined_segments.append(current_combined)
+                
+                return combined_segments
+            
+            # Split the text into segments
+            text_segments = split_by_punctuation(text)
+            print(f"[WS-TTS] Split text into {len(text_segments)} segments by punctuation")
+            for i, segment in enumerate(text_segments):
+                print(f"[WS-TTS] Segment {i+1}: {segment[:50]}{'...' if len(segment) > 50 else ''}")
+            
             try:
                 # Get speaker ID
                 # Check if speaker_id is an integer (direct ID) or a string (lookup key)
@@ -175,9 +244,6 @@ async def websocket_tts(websocket: WebSocket):
                     os.makedirs(chunk_save_folder, exist_ok=True)
                     print(f"[WS-TTS] Created/verified chunk save folder: {chunk_save_folder}")
                 
-                # Generate audio
-                print(f"Generating audio for text: {text[:50]}{'...' if len(text) > 50 else ''}")
-                
                 before_inference_time = time.time()
                 elapsed_since_start = (before_inference_time - start_time) * 1000
                 print(f"[WS-TTS] 📊 Pre-processing time: {elapsed_since_start:.2f}ms")
@@ -189,235 +255,236 @@ async def websocket_tts(websocket: WebSocket):
                 first_chunk_time = None
                 first_chunk_since_request = None
                 first_chunk_sent_since_request = None
-                
-                try:
-                    # Generate full audio first
-                    inference_start_time = time.time()
-                    print(f"[WS-TTS] 🚀 Starting inference at: {time.strftime('%H:%M:%S.%f')[:-3]}")
-                    
-                    audio = model.tts_to_file(
-                        text=text,
-                        speaker_id=speaker_id,
-                        output_path=None,  # Don't save to file
-                        sdp_ratio=request_data.get("sdp_ratio", 0.2),
-                        noise_scale=request_data.get("noise_scale", 0.6),
-                        noise_scale_w=request_data.get("noise_scale_w", 0.8),
-                        speed=request_data.get("speed", 1.0),
-                        quiet=True
-                    )
-                    
-                    # Record first chunk timing immediately after inference
-                    if not first_chunk_generated:
-                        chunk_start_time = time.time()
-                        first_chunk_time = (chunk_start_time - inference_start_time) * 1000
-                        first_chunk_since_request = (chunk_start_time - start_time) * 1000
-                        print(f"[WS-TTS] ⚡ First chunk generated time: {first_chunk_time:.2f}ms")
-                        print(f"[WS-TTS] ⚡ First chunk since request arrival: {first_chunk_since_request:.2f}ms")
-                        first_chunk_generated = True
-                        
-                except Exception as inference_error:
-                    print(f"Inference error: {str(inference_error)}")
-                    print(f"Error type: {type(inference_error)}")
-                    import traceback
-                    print(f"Traceback: {traceback.format_exc()}")
-                    raise
-                
-                after_inference_time = time.time()
-                elapsed_since_start = (after_inference_time - start_time) * 1000
-                elapsed_since_last = (after_inference_time - before_inference_time) * 1000
-                print(f"Time after inference: {elapsed_since_start:.2f} ms since start, {elapsed_since_last:.2f} ms since before inference")
-                
-                # Resample audio if needed
-                if model.hps.data.sampling_rate != output_sample_rate:
-                    import torchaudio
-                    resample_start = time.time()
-                    audio_tensor = torch.from_numpy(audio).unsqueeze(0)
-                    audio_tensor = torchaudio.functional.resample(
-                        audio_tensor, 
-                        model.hps.data.sampling_rate, 
-                        output_sample_rate
-                    )
-                    audio = audio_tensor.squeeze(0).numpy()
-                    resample_time = (time.time() - resample_start) * 1000
-                    print(f"[WS-TTS] 🔄 Resampled audio: {resample_time:.2f}ms ({model.hps.data.sampling_rate} → {output_sample_rate} Hz)")
-                else:
-                    print(f"[WS-TTS] ✓ No resampling needed (optimal)")
-                
-                # Stream audio in chunks
-                chunk_duration = 1.0  # 1 second chunks
-                samples_per_chunk = int(output_sample_rate * chunk_duration)
                 chunk_counter = 0
                 
-                print(f"[WS-TTS] Streaming audio format: {audio_format}")
-                print(f"[WS-TTS] Audio length: {len(audio)} samples, chunk size: {samples_per_chunk} samples")
-                
-                # Stream audio data in chunks
-                for i in range(0, len(audio), samples_per_chunk):
-                    chunk_start_time = time.time()
+                # Process each text segment immediately
+                for segment_idx, segment_text in enumerate(text_segments):
+                    segment_start_time = time.time()
+                    print(f"[WS-TTS] Processing segment {segment_idx+1}/{len(text_segments)}: {segment_text[:50]}{'...' if len(segment_text) > 50 else ''}")
                     
-                    # Extract audio chunk
-                    audio_chunk = audio[i:i + samples_per_chunk]
-                    
-                    if audio_format.lower() == "pcm":
-                        # Convert to 16-bit PCM
-                        audio_np = audio_chunk
+                    try:
+                        # Generate audio for this segment
+                        inference_start_time = time.time()
+                        if segment_idx == 0:
+                            print(f"[WS-TTS] 🚀 Starting first segment inference at: {time.strftime('%H:%M:%S.%f')[:-3]}")
                         
-                        # Apply volume multiplier (same logic as MP3)
-                        volume_multiplier = 2.0
-                        # Apply higher volume for Chinese language PCM
-                        if language == "ZH":
-                            volume_multiplier = 8.47  # Equivalent to 13dB increase
-                            
-                        # Log volume multiplier value
-                        print(f"Volume multiplier: {volume_multiplier:.1f}")
-                            
-                        normalized_audio = audio_np * volume_multiplier
-                        # Clip to avoid distortion
-                        normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
+                        segment_audio = model.tts_to_file(
+                            text=segment_text,
+                            speaker_id=speaker_id,
+                            output_path=None,  # Don't save to file
+                            sdp_ratio=request_data.get("sdp_ratio", 0.2),
+                            noise_scale=request_data.get("noise_scale", 0.6),
+                            noise_scale_w=request_data.get("noise_scale_w", 0.8),
+                            speed=request_data.get("speed", 1.0),
+                            quiet=True
+                        )
                         
-                        # Normalize to [-1, 1] range if needed
-                        if normalized_audio.max() > 1.0 or normalized_audio.min() < -1.0:
-                            normalized_audio = normalized_audio / max(abs(normalized_audio.max()), abs(normalized_audio.min()))
-                        # Convert to 16-bit PCM
-                        pcm_data = (normalized_audio * 32767).astype(np.int16).tobytes()
+                        # Record first chunk timing immediately after first segment inference
+                        if not first_chunk_generated:
+                            chunk_start_time = time.time()
+                            first_chunk_time = (chunk_start_time - inference_start_time) * 1000
+                            first_chunk_since_request = (chunk_start_time - start_time) * 1000
+                            print(f"[WS-TTS] ⚡ First chunk generated time: {first_chunk_time:.2f}ms")
+                            print(f"[WS-TTS] ⚡ First chunk since request arrival: {first_chunk_since_request:.2f}ms")
+                            first_chunk_generated = True
                         
-                        # Send PCM chunk
-                        await websocket.send_bytes(pcm_data)
+                        segment_inference_time = (time.time() - inference_start_time) * 1000
+                        print(f"[WS-TTS] Segment {segment_idx+1} inference time: {segment_inference_time:.2f}ms")
                         
-                        # Track first chunk sent timing
-                        if not first_chunk_sent:
-                            first_chunk_sent_time = time.time()
-                            first_chunk_sent_since_request = (first_chunk_sent_time - start_time) * 1000
-                            print(f"[WS-TTS] 🎯 First chunk sent since request: {first_chunk_sent_since_request:.2f}ms")
-                            first_chunk_sent = True
-                        
-                        # Save PCM chunk if requested
-                        if save_audio_files and chunk_save_folder:
-                            chunk_filename = f"chunk_{chunk_counter}.pcm"
-                            chunk_filepath = os.path.join(chunk_save_folder, chunk_filename)
-                            try:
-                                with open(chunk_filepath, 'wb') as f:
-                                    f.write(pcm_data)
-                                print(f"[WS-TTS] Saved {chunk_filename} ({len(pcm_data)} bytes)")
-                            except Exception as save_error:
-                                print(f"[WS-TTS] Error saving chunk file: {save_error}")
-                        
-                        chunk_processing_time = (time.time() - chunk_start_time) * 1000
-                        print(f"[WS-TTS] 📦 PCM chunk {chunk_counter} sent: {len(pcm_data)} bytes, time: {chunk_processing_time:.2f}ms")
-                        
-                    elif audio_format.lower() == "mp3":
-                        # Convert chunk to MP3 with fallback when FFmpeg is not available
-                        import soundfile as sf
-                        
-                        # Check if audio is valid
-                        if len(audio_chunk) == 0 or np.isnan(audio_chunk).any():
-                            continue
-                        
-                        # Normalize audio to increase volume before writing to MP3
-                        volume_multiplier = 2.0
-                        # Apply higher volume for Chinese language MP3
-                        if language == "ZH":
-                            volume_multiplier = 8.47  # Equivalent to 13dB increase
-                            
-                        # Log volume multiplier value
-                        print(f"Volume multiplier: {volume_multiplier:.1f}")
-                            
-                        normalized_audio = audio_chunk * volume_multiplier
-                        # Clip to avoid distortion
-                        normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
-                        
-                        # Try FFmpeg first, fallback to soundfile if FFmpeg not available
-                        mp3_data = None
-                        try:
-                            import subprocess
-                            import shutil
-                            
-                            # Check if ffmpeg is available
-                            if shutil.which('ffmpeg') is None:
-                                raise FileNotFoundError("FFmpeg not found")
-                            
-                            # Use FFmpeg to convert WAV to MP3 with optimized settings
-                            process = subprocess.Popen(
-                                [
-                                    'ffmpeg',
-                                    '-f', 's16le',  # 16-bit little-endian PCM
-                                    '-ar', str(output_sample_rate),  # Input sample rate
-                                    '-ac', '1',  # Mono
-                                    '-i', 'pipe:0',  # Read from stdin
-                                    '-c:a', 'libmp3lame',  # MP3 encoder
-                                    '-b:a', '128k',  # 128 kbps
-                                    '-q:a', '2',  # Quality setting
-                                    '-write_id3v1', '0',  # No ID3v1
-                                    '-write_id3v2', '0',  # No ID3v2
-                                    '-id3v2_version', '0',  # No ID3v2
-                                    '-write_xing', '0',  # No Xing header
-                                    '-fflags', '+bitexact',
-                                    '-f', 'mp3',  # MP3 format
-                                    'pipe:1'  # Output to stdout
-                                ],
-                                stdin=subprocess.PIPE,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE
+                        # Resample segment audio if needed
+                        if model.hps.data.sampling_rate != output_sample_rate:
+                            import torchaudio
+                            resample_start = time.time()
+                            audio_tensor = torch.from_numpy(segment_audio).unsqueeze(0)
+                            audio_tensor = torchaudio.functional.resample(
+                                audio_tensor, 
+                                model.hps.data.sampling_rate, 
+                                output_sample_rate
                             )
-                            
-                            # Convert to PCM data for FFmpeg
-                            normalized_pcm = (normalized_audio * 32767).astype(np.int16)
-                            mp3_data, error = process.communicate(input=normalized_pcm.tobytes())
-                            
-                            if process.returncode != 0:
-                                print(f"FFmpeg error: {error.decode()}")
-                                raise Exception("FFmpeg conversion failed")
-                            
-                            # Trim MP3 padding for smoother playback
-                            mp3_data = trim_mp3_padding(mp3_data)
-                            print(f"[WS-TTS] MP3 conversion via FFmpeg successful")
-                            
-                        except Exception as ffmpeg_error:
-                            print(f"[WS-TTS] FFmpeg conversion failed: {str(ffmpeg_error)}")
-                            print(f"[WS-TTS] Falling back to WAV format for chunk {chunk_counter}")
-                            
-                            # Fallback: send as WAV format
-                            try:
-                                wav_io = io.BytesIO()
-                                sf.write(wav_io, normalized_audio, output_sample_rate, format="WAV")
-                                mp3_data = wav_io.getvalue()
-                                wav_io.close()
-                                print(f"[WS-TTS] WAV fallback conversion successful")
-                            except Exception as wav_error:
-                                print(f"[WS-TTS] WAV fallback also failed: {str(wav_error)}")
-                                continue
+                            segment_audio = audio_tensor.squeeze(0).numpy()
+                            resample_time = (time.time() - resample_start) * 1000
+                            print(f"[WS-TTS] 🔄 Segment {segment_idx+1} resampled: {resample_time:.2f}ms ({model.hps.data.sampling_rate} → {output_sample_rate} Hz)")
+                        else:
+                            print(f"[WS-TTS] ✓ Segment {segment_idx+1}: No resampling needed (optimal)")
                         
-                        if mp3_data:
-                            # Send MP3/WAV chunk
-                            await websocket.send_bytes(mp3_data)
+                        # Stream segment audio in chunks
+                        chunk_duration = 1.0  # 1 second chunks
+                        samples_per_chunk = int(output_sample_rate * chunk_duration)
+                        
+                        # Stream audio data in chunks immediately
+                        for i in range(0, len(segment_audio), samples_per_chunk):
+                            chunk_start_time = time.time()
                             
-                            # Track first chunk sent timing
-                            if not first_chunk_sent:
-                                first_chunk_sent_time = time.time()
-                                first_chunk_sent_since_request = (first_chunk_sent_time - start_time) * 1000
-                                print(f"[WS-TTS] 🎯 First chunk sent since request: {first_chunk_sent_since_request:.2f}ms")
-                                first_chunk_sent = True
+                            # Extract audio chunk
+                            audio_chunk = segment_audio[i:i + samples_per_chunk]
                             
-                            # Save MP3 chunk if requested
-                            if save_audio_files and chunk_save_folder:
-                                chunk_filename = f"chunk_{chunk_counter}.mp3"
-                                chunk_filepath = os.path.join(chunk_save_folder, chunk_filename)
+                            if audio_format.lower() == "pcm":
+                                # Convert to 16-bit PCM
+                                audio_np = audio_chunk
+                                
+                                # Apply volume multiplier (same logic as MP3)
+                                volume_multiplier = 2.0
+                                # Apply higher volume for Chinese language PCM
+                                if language == "ZH":
+                                    volume_multiplier = 8.47  # Equivalent to 13dB increase
+                                    
+                                # Log volume multiplier value
+                                print(f"Volume multiplier: {volume_multiplier:.1f}")
+                                    
+                                normalized_audio = audio_np * volume_multiplier
+                                # Clip to avoid distortion
+                                normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
+                                
+                                # Normalize to [-1, 1] range if needed
+                                if normalized_audio.max() > 1.0 or normalized_audio.min() < -1.0:
+                                    normalized_audio = normalized_audio / max(abs(normalized_audio.max()), abs(normalized_audio.min()))
+                                # Convert to 16-bit PCM
+                                pcm_data = (normalized_audio * 32767).astype(np.int16).tobytes()
+                                
+                                # Send PCM chunk immediately
+                                await websocket.send_bytes(pcm_data)
+                                
+                                # Track first chunk sent timing
+                                if not first_chunk_sent:
+                                    first_chunk_sent_time = time.time()
+                                    first_chunk_sent_since_request = (first_chunk_sent_time - start_time) * 1000
+                                    print(f"[WS-TTS] 🎯 First chunk sent since request: {first_chunk_sent_since_request:.2f}ms")
+                                    first_chunk_sent = True
+                                
+                                # Save PCM chunk if requested
+                                if save_audio_files and chunk_save_folder:
+                                    chunk_filename = f"chunk_{chunk_counter}.pcm"
+                                    chunk_filepath = os.path.join(chunk_save_folder, chunk_filename)
+                                    try:
+                                        with open(chunk_filepath, 'wb') as f:
+                                            f.write(pcm_data)
+                                        print(f"[WS-TTS] Saved {chunk_filename} ({len(pcm_data)} bytes)")
+                                    except Exception as save_error:
+                                        print(f"[WS-TTS] Error saving chunk file: {save_error}")
+                                
+                                chunk_processing_time = (time.time() - chunk_start_time) * 1000
+                                print(f"[WS-TTS] 📦 PCM chunk {chunk_counter} sent: {len(pcm_data)} bytes, time: {chunk_processing_time:.2f}ms")
+                                
+                            elif audio_format.lower() == "mp3":
+                                # Convert chunk to MP3 with fallback when FFmpeg is not available
+                                import soundfile as sf
+                                
+                                # Check if audio is valid
+                                if len(audio_chunk) == 0 or np.isnan(audio_chunk).any():
+                                    continue
+                                
+                                # Normalize audio to increase volume before writing to MP3
+                                volume_multiplier = 2.0
+                                # Apply higher volume for Chinese language MP3
+                                if language == "ZH":
+                                    volume_multiplier = 8.47  # Equivalent to 13dB increase
+                                    
+                                # Log volume multiplier value
+                                print(f"Volume multiplier: {volume_multiplier:.1f}")
+                                    
+                                normalized_audio = audio_chunk * volume_multiplier
+                                # Clip to avoid distortion
+                                normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
+                                
+                                # Try FFmpeg first, fallback to soundfile if FFmpeg not available
+                                mp3_data = None
                                 try:
-                                    with open(chunk_filepath, 'wb') as f:
-                                        f.write(mp3_data)
-                                    print(f"[WS-TTS] Saved {chunk_filename} ({len(mp3_data)} bytes)")
-                                except Exception as save_error:
-                                    print(f"[WS-TTS] Error saving chunk file: {save_error}")
+                                    import subprocess
+                                    import shutil
+                                    
+                                    # Check if ffmpeg is available
+                                    if shutil.which('ffmpeg') is None:
+                                        raise FileNotFoundError("FFmpeg not found")
+                                    
+                                    # Use FFmpeg to convert WAV to MP3 with optimized settings
+                                    process = subprocess.Popen(
+                                        [
+                                            'ffmpeg',
+                                            '-f', 's16le',  # 16-bit little-endian PCM
+                                            '-ar', str(output_sample_rate),  # Input sample rate
+                                            '-ac', '1',  # Mono
+                                            '-i', 'pipe:0',  # Read from stdin
+                                            '-c:a', 'libmp3lame',  # MP3 encoder
+                                            '-b:a', '128k',  # 128 kbps
+                                            '-q:a', '2',  # Quality setting
+                                            '-write_id3v1', '0',  # No ID3v1
+                                            '-write_id3v2', '0',  # No ID3v2
+                                            '-id3v2_version', '0',  # No ID3v2
+                                            '-write_xing', '0',  # No Xing header
+                                            '-fflags', '+bitexact',
+                                            '-f', 'mp3',  # MP3 format
+                                            'pipe:1'  # Output to stdout
+                                        ],
+                                        stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE
+                                    )
+                                    
+                                    # Convert to PCM data for FFmpeg
+                                    normalized_pcm = (normalized_audio * 32767).astype(np.int16)
+                                    mp3_data, error = process.communicate(input=normalized_pcm.tobytes())
+                                    
+                                    if process.returncode != 0:
+                                        print(f"FFmpeg error: {error.decode()}")
+                                        raise Exception("FFmpeg conversion failed")
+                                    
+                                    # Trim MP3 padding for smoother playback
+                                    mp3_data = trim_mp3_padding(mp3_data)
+                                    print(f"[WS-TTS] MP3 conversion via FFmpeg successful")
+                                    
+                                except Exception as ffmpeg_error:
+                                    print(f"[WS-TTS] FFmpeg conversion failed: {str(ffmpeg_error)}")
+                                    print(f"[WS-TTS] Falling back to WAV format for chunk {chunk_counter}")
+                                    
+                                    # Fallback: send as WAV format
+                                    try:
+                                        wav_io = io.BytesIO()
+                                        sf.write(wav_io, normalized_audio, output_sample_rate, format="WAV")
+                                        mp3_data = wav_io.getvalue()
+                                        wav_io.close()
+                                        print(f"[WS-TTS] WAV fallback conversion successful")
+                                    except Exception as wav_error:
+                                        print(f"[WS-TTS] WAV fallback also failed: {str(wav_error)}")
+                                        continue
+                                
+                                if mp3_data:
+                                    # Send MP3/WAV chunk immediately
+                                    await websocket.send_bytes(mp3_data)
+                                    
+                                    # Track first chunk sent timing
+                                    if not first_chunk_sent:
+                                        first_chunk_sent_time = time.time()
+                                        first_chunk_sent_since_request = (first_chunk_sent_time - start_time) * 1000
+                                        print(f"[WS-TTS] 🎯 First chunk sent since request: {first_chunk_sent_since_request:.2f}ms")
+                                        first_chunk_sent = True
+                                    
+                                    # Save MP3 chunk if requested
+                                    if save_audio_files and chunk_save_folder:
+                                        chunk_filename = f"chunk_{chunk_counter}.mp3"
+                                        chunk_filepath = os.path.join(chunk_save_folder, chunk_filename)
+                                        try:
+                                            with open(chunk_filepath, 'wb') as f:
+                                                f.write(mp3_data)
+                                            print(f"[WS-TTS] Saved {chunk_filename} ({len(mp3_data)} bytes)")
+                                        except Exception as save_error:
+                                            print(f"[WS-TTS] Error saving chunk file: {save_error}")
+                                    
+                                    chunk_processing_time = (time.time() - chunk_start_time) * 1000
+                                    print(f"[WS-TTS] 📦 MP3 chunk {chunk_counter} sent: {len(mp3_data)} bytes, time: {chunk_processing_time:.2f}ms")
                             
-                            chunk_processing_time = (time.time() - chunk_start_time) * 1000
-                            print(f"[WS-TTS] 📦 MP3 chunk {chunk_counter} sent: {len(mp3_data)} bytes, time: {chunk_processing_time:.2f}ms")
+                            else:
+                                await websocket.send_text(json.dumps({"error": f"Unsupported audio format: {audio_format}"}))
+                                break
+                            
+                            chunk_counter += 1
+                            await asyncio.sleep(0)  # Allow other tasks
                         
-                    else:
-                        await websocket.send_text(json.dumps({"error": f"Unsupported audio format: {audio_format}"}))
-                        break
-                    
-                    chunk_counter += 1
-                    await asyncio.sleep(0)  # Allow other tasks
+                        segment_total_time = (time.time() - segment_start_time) * 1000
+                        print(f"[WS-TTS] 📊 Segment {segment_idx+1} total processing time: {segment_total_time:.2f}ms")
+                        
+                    except Exception as segment_error:
+                        print(f"Error processing segment {segment_idx+1}: {str(segment_error)}")
+                        continue
                 
                 # Log completion
                 generation_time = time.time() - start_time
@@ -430,6 +497,7 @@ async def websocket_tts(websocket: WebSocket):
                 print(f"[WS-TTS] 📋   Sample Rate: {output_sample_rate} Hz")
                 print(f"[WS-TTS] 📋   Speaker ID: {speaker_id}")
                 print(f"[WS-TTS] 📋   Total Generation Time: {generation_time:.2f}s")
+                print(f"[WS-TTS] 📋   Text Segments: {len(text_segments)}")
                 
                 # Add first chunk timing summary
                 if first_chunk_generated:
