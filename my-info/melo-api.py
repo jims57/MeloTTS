@@ -1,8 +1,10 @@
 import torch
 import numpy as np
 import io
+import json
+import base64
 from typing import Optional
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import uvicorn
@@ -99,162 +101,194 @@ async def startup_event():
 async def root():
     return {"message": "MeloTTS API is running"}
 
-@app.post("/tts")
-async def generate_tts(request: TTSRequest):
-    start_time = time.time()
-    print(f"API start time: {time.strftime('%H:%M:%S.%f')[:-3]}")
-    
-    # Get the appropriate model - convert language to uppercase
-    language = request.language.upper() if request.language else "ZH"
-    if language not in global_models:
-        raise HTTPException(status_code=400, detail=f"Language '{language}' not supported")
-    
-    model = global_models[language]
+@app.websocket("/tts")
+async def generate_tts(websocket: WebSocket):
+    await websocket.accept()
     
     try:
-        # Get speaker ID
-        speaker_id = request.speaker_id
-        
-        # Check if speaker_id is an integer (direct ID) or a string (lookup key)
-        if isinstance(speaker_id, int):
-            # If it's already an integer, use it directly
-            print(f"Using direct speaker_id integer: {speaker_id}")
-            # Verify it's in range for the model
-            max_id = max(model.hps.data.spk2id.values())
-            if speaker_id > max_id:
-                print(f"Warning: speaker_id {speaker_id} exceeds max ID {max_id}, using default")
-                if language == "EN":
-                    speaker_id = model.hps.data.spk2id["EN-Default"]
-                    print(f"Using EN-Default speaker (American accent) for English: {speaker_id}")
+        while True:
+            # Receive JSON data from client
+            data = await websocket.receive_text()
+            request_data = json.loads(data)
+            
+            # Parse request data (same structure as TTSRequest)
+            text = request_data.get("text", "")
+            speaker_id = request_data.get("speaker_id", 0)
+            language = request_data.get("language", "ZH")
+            speed = request_data.get("speed", 1.0)
+            audio_format = request_data.get("audio_format", "wav")
+            sdp_ratio = request_data.get("sdp_ratio", 0.2)
+            noise_scale = request_data.get("noise_scale", 0.6)
+            noise_scale_w = request_data.get("noise_scale_w", 0.8)
+            
+            start_time = time.time()
+            print(f"API start time: {time.strftime('%H:%M:%S.%f')[:-3]}")
+            
+            # Get the appropriate model - convert language to uppercase
+            language = language.upper() if language else "ZH"
+            if language not in global_models:
+                await websocket.send_text(json.dumps({"error": f"Language '{language}' not supported"}))
+                continue
+            
+            model = global_models[language]
+            
+            try:
+                # Get speaker ID
+                # Check if speaker_id is an integer (direct ID) or a string (lookup key)
+                if isinstance(speaker_id, int):
+                    # If it's already an integer, use it directly
+                    print(f"Using direct speaker_id integer: {speaker_id}")
+                    # Verify it's in range for the model
+                    max_id = max(model.hps.data.spk2id.values())
+                    if speaker_id > max_id:
+                        print(f"Warning: speaker_id {speaker_id} exceeds max ID {max_id}, using default")
+                        if language == "EN":
+                            speaker_id = model.hps.data.spk2id["EN-Default"]
+                            print(f"Using EN-Default speaker (American accent) for English: {speaker_id}")
+                        else:
+                            speaker_id = list(model.hps.data.spk2id.values())[0]
                 else:
-                    speaker_id = list(model.hps.data.spk2id.values())[0]
-        else:
-            # Original string-based lookup logic
-            if language == "EN" and (speaker_id is None or speaker_id == "" or speaker_id not in model.hps.data.spk2id):
-                speaker_id = model.hps.data.spk2id["EN-Default"]
-                print(f"Using EN-Default speaker (American accent) for English: {speaker_id}")
-            elif speaker_id not in model.hps.data.spk2id:
-                # Use first available speaker if specified one doesn't exist
-                speaker_id = list(model.hps.data.spk2id.values())[0]
-                print(f"Using fallback speaker_id: {speaker_id}")
-            else:
-                speaker_id = model.hps.data.spk2id[speaker_id]
-                print(f"Using requested speaker_id: {speaker_id}")
-        
-        print(f"Available speakers for {language}: {model.hps.data.spk2id}")
-        
-        # Generate audio
-        print(f"Generating audio for text: {request.text[:50]}{'...' if len(request.text) > 50 else ''}")
-        
-        before_inference_time = time.time()
-        elapsed_since_start = (before_inference_time - start_time) * 1000
-        print(f"Time before inference: {elapsed_since_start:.2f} ms since start")
-        
-        try:
-            audio = model.tts_to_file(
-                text=request.text,
-                speaker_id=speaker_id,
-                output_path=None,  # Don't save to file
-                sdp_ratio=request.sdp_ratio,
-                noise_scale=request.noise_scale,
-                noise_scale_w=request.noise_scale_w,
-                speed=request.speed,
-                quiet=True
-            )
-        except Exception as inference_error:
-            print(f"Inference error: {str(inference_error)}")
-            print(f"Error type: {type(inference_error)}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
-            raise
-        
-        after_inference_time = time.time()
-        elapsed_since_start = (after_inference_time - start_time) * 1000
-        elapsed_since_last = (after_inference_time - before_inference_time) * 1000
-        print(f"Time after inference: {elapsed_since_start:.2f} ms since start, {elapsed_since_last:.2f} ms since before inference")
-        
-        # Create in-memory file
-        audio_io = io.BytesIO()
-        
-        if request.audio_format.lower() == "wav":
-            import soundfile as sf
-            sf.write(audio_io, audio, model.hps.data.sampling_rate, format="WAV")
-            media_type = "audio/wav"
-            filename = "output.wav"
-        elif request.audio_format.lower() == "mp3":
-            import soundfile as sf
-            # First write as WAV to memory
-            wav_io = io.BytesIO()
-            
-            # Check if audio is valid
-            if len(audio) == 0 or np.isnan(audio).any():
-                raise HTTPException(status_code=500, detail="Generated audio is invalid or empty")
-            
-            # Normalize audio to increase volume before writing to MP3
-            volume_multiplier = 2.0
-            # Apply higher volume for Chinese language MP3
-            if language == "ZH":
-                volume_multiplier = 8.47  # Equivalent to 13dB increase
-                
-            # Log volume multiplier value
-            print(f"Volume multiplier: {volume_multiplier:.1f}")
-                
-            normalized_audio = audio * volume_multiplier
-            # Clip to avoid distortion
-            normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
-            
-            sf.write(wav_io, normalized_audio, model.hps.data.sampling_rate, format="WAV")
-            wav_io.seek(0)
-            
-            # Try MP3 conversion up to 3 times
-            max_attempts = 3
-            for attempt in range(max_attempts):
-                try:
-                    # Convert to MP3 using torchaudio
-                    import torchaudio
-                    waveform, sample_rate = torchaudio.load(wav_io)
-                    
-                    # Convert to MP3
-                    mp3_io = io.BytesIO()
-                    torchaudio.save(mp3_io, waveform, sample_rate, format="mp3")
-                    audio_io = mp3_io
-                    media_type = "audio/mpeg"
-                    filename = "output.mp3"
-                    break  # Success, exit the retry loop
-                except RuntimeError as e:
-                    print(f"MP3 conversion attempt {attempt+1}/{max_attempts} failed: {str(e)}")
-                    if attempt < max_attempts - 1:
-                        # Reset WAV IO for next attempt
-                        wav_io.seek(0)
+                    # Original string-based lookup logic
+                    if language == "EN" and (speaker_id is None or speaker_id == "" or speaker_id not in model.hps.data.spk2id):
+                        speaker_id = model.hps.data.spk2id["EN-Default"]
+                        print(f"Using EN-Default speaker (American accent) for English: {speaker_id}")
+                    elif speaker_id not in model.hps.data.spk2id:
+                        # Use first available speaker if specified one doesn't exist
+                        speaker_id = list(model.hps.data.spk2id.values())[0]
+                        print(f"Using fallback speaker_id: {speaker_id}")
                     else:
-                        # All attempts failed, raise an appropriate error
-                        print(f"All MP3 conversion attempts failed")
-                        raise HTTPException(status_code=500, detail="Failed to generate MP3 audio after multiple attempts")
-            # After the loop, audio_io will contain the MP3 data if conversion succeeded
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported audio format: {request.audio_format}")
-        
-        audio_io.seek(0)
-        
-        first_byte_time = time.time()
-        elapsed_since_start = (first_byte_time - start_time) * 1000
-        elapsed_since_last = (first_byte_time - after_inference_time) * 1000
-        print(f"Time to send first byte: {elapsed_since_start:.2f} ms since start, {elapsed_since_last:.2f} ms since after inference")
-        
-        generation_time = time.time() - start_time
-        print(f"Audio generated in {generation_time:.2f} seconds")
-        
-        return StreamingResponse(
-            audio_io, 
-            media_type=media_type,
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-    
+                        speaker_id = model.hps.data.spk2id[speaker_id]
+                        print(f"Using requested speaker_id: {speaker_id}")
+                
+                print(f"Available speakers for {language}: {model.hps.data.spk2id}")
+                
+                # Generate audio
+                print(f"Generating audio for text: {text[:50]}{'...' if len(text) > 50 else ''}")
+                
+                before_inference_time = time.time()
+                elapsed_since_start = (before_inference_time - start_time) * 1000
+                print(f"Time before inference: {elapsed_since_start:.2f} ms since start")
+                
+                try:
+                    audio = model.tts_to_file(
+                        text=text,
+                        speaker_id=speaker_id,
+                        output_path=None,  # Don't save to file
+                        sdp_ratio=sdp_ratio,
+                        noise_scale=noise_scale,
+                        noise_scale_w=noise_scale_w,
+                        speed=speed,
+                        quiet=True
+                    )
+                except Exception as inference_error:
+                    print(f"Inference error: {str(inference_error)}")
+                    print(f"Error type: {type(inference_error)}")
+                    import traceback
+                    print(f"Traceback: {traceback.format_exc()}")
+                    raise
+                
+                after_inference_time = time.time()
+                elapsed_since_start = (after_inference_time - start_time) * 1000
+                elapsed_since_last = (after_inference_time - before_inference_time) * 1000
+                print(f"Time after inference: {elapsed_since_start:.2f} ms since start, {elapsed_since_last:.2f} ms since before inference")
+                
+                # Create in-memory file
+                audio_io = io.BytesIO()
+                
+                if audio_format.lower() == "wav":
+                    import soundfile as sf
+                    sf.write(audio_io, audio, model.hps.data.sampling_rate, format="WAV")
+                    media_type = "audio/wav"
+                    filename = "output.wav"
+                elif audio_format.lower() == "mp3":
+                    import soundfile as sf
+                    # First write as WAV to memory
+                    wav_io = io.BytesIO()
+                    
+                    # Check if audio is valid
+                    if len(audio) == 0 or np.isnan(audio).any():
+                        await websocket.send_text(json.dumps({"error": "Generated audio is invalid or empty"}))
+                        continue
+                    
+                    # Normalize audio to increase volume before writing to MP3
+                    volume_multiplier = 2.0
+                    # Apply higher volume for Chinese language MP3
+                    if language == "ZH":
+                        volume_multiplier = 8.47  # Equivalent to 13dB increase
+                        
+                    # Log volume multiplier value
+                    print(f"Volume multiplier: {volume_multiplier:.1f}")
+                        
+                    normalized_audio = audio * volume_multiplier
+                    # Clip to avoid distortion
+                    normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
+                    
+                    sf.write(wav_io, normalized_audio, model.hps.data.sampling_rate, format="WAV")
+                    wav_io.seek(0)
+                    
+                    # Try MP3 conversion up to 3 times
+                    max_attempts = 3
+                    for attempt in range(max_attempts):
+                        try:
+                            # Convert to MP3 using torchaudio
+                            import torchaudio
+                            waveform, sample_rate = torchaudio.load(wav_io)
+                            
+                            # Convert to MP3
+                            mp3_io = io.BytesIO()
+                            torchaudio.save(mp3_io, waveform, sample_rate, format="mp3")
+                            audio_io = mp3_io
+                            media_type = "audio/mpeg"
+                            filename = "output.mp3"
+                            break  # Success, exit the retry loop
+                        except RuntimeError as e:
+                            print(f"MP3 conversion attempt {attempt+1}/{max_attempts} failed: {str(e)}")
+                            if attempt < max_attempts - 1:
+                                # Reset WAV IO for next attempt
+                                wav_io.seek(0)
+                            else:
+                                # All attempts failed, raise an appropriate error
+                                print(f"All MP3 conversion attempts failed")
+                                await websocket.send_text(json.dumps({"error": "Failed to generate MP3 audio after multiple attempts"}))
+                                continue
+                    # After the loop, audio_io will contain the MP3 data if conversion succeeded
+                else:
+                    await websocket.send_text(json.dumps({"error": f"Unsupported audio format: {audio_format}"}))
+                    continue
+                
+                audio_io.seek(0)
+                
+                first_byte_time = time.time()
+                elapsed_since_start = (first_byte_time - start_time) * 1000
+                elapsed_since_last = (first_byte_time - after_inference_time) * 1000
+                print(f"Time to send first byte: {elapsed_since_start:.2f} ms since start, {elapsed_since_last:.2f} ms since after inference")
+                
+                generation_time = time.time() - start_time
+                print(f"Audio generated in {generation_time:.2f} seconds")
+                
+                # Convert audio to base64 for WebSocket transmission
+                audio_data = audio_io.getvalue()
+                audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+                
+                response = {
+                    "success": True,
+                    "audio_data": audio_base64,
+                    "format": audio_format,
+                    "filename": filename
+                }
+                
+                await websocket.send_text(json.dumps(response))
+            
+            except Exception as e:
+                print(f"Error in generate_tts: {str(e)}")
+                import traceback
+                print(f"Traceback: {traceback.format_exc()}")
+                await websocket.send_text(json.dumps({"error": f"Error generating audio: {str(e)}"}))
+                
+    except WebSocketDisconnect:
+        print("WebSocket connection closed")
     except Exception as e:
-        print(f"Error in generate_tts: {str(e)}")
-        import traceback
-        print(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Error generating audio: {str(e)}")
+        print(f"WebSocket error: {e}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=9003)
