@@ -278,7 +278,7 @@ async def websocket_tts(websocket: WebSocket):
                         print(f"[WS-TTS] PCM chunk {chunk_counter} sent: {len(pcm_data)} bytes, time: {chunk_processing_time:.2f}ms")
                         
                     elif audio_format.lower() == "mp3":
-                        # Convert chunk to MP3
+                        # Convert chunk to MP3 using enhanced method from cosy-api.py
                         import soundfile as sf
                         # First write as WAV to memory
                         wav_io = io.BytesIO()
@@ -303,18 +303,46 @@ async def websocket_tts(websocket: WebSocket):
                         sf.write(wav_io, normalized_audio, output_sample_rate, format="WAV")
                         wav_io.seek(0)
                         
-                        # Convert to MP3 using torchaudio
+                        # Convert to MP3 using FFmpeg (enhanced method from cosy-api.py)
                         try:
-                            import torchaudio
-                            waveform, sample_rate = torchaudio.load(wav_io)
+                            import subprocess
+                            # Use FFmpeg to convert WAV to MP3 with optimized settings
+                            process = subprocess.Popen(
+                                [
+                                    'ffmpeg',
+                                    '-f', 's16le',  # 16-bit little-endian PCM
+                                    '-ar', str(output_sample_rate),  # Input sample rate
+                                    '-ac', '1',  # Mono
+                                    '-i', 'pipe:0',  # Read from stdin
+                                    '-c:a', 'libmp3lame',  # MP3 encoder
+                                    '-b:a', '128k',  # 128 kbps
+                                    '-q:a', '2',  # Quality setting
+                                    '-write_id3v1', '0',  # No ID3v1
+                                    '-write_id3v2', '0',  # No ID3v2
+                                    '-id3v2_version', '0',  # No ID3v2
+                                    '-write_xing', '0',  # No Xing header
+                                    '-fflags', '+bitexact',
+                                    '-f', 'mp3',  # MP3 format
+                                    'pipe:1'  # Output to stdout
+                                ],
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE
+                            )
                             
-                            # Convert to MP3
-                            mp3_io = io.BytesIO()
-                            torchaudio.save(mp3_io, waveform, sample_rate, format="mp3")
-                            mp3_data = mp3_io.getvalue()
+                            # Convert to PCM data for FFmpeg
+                            normalized_pcm = (normalized_audio * 32767).astype(np.int16)
+                            mp3_data, error = process.communicate(input=normalized_pcm.tobytes())
+                            
+                            if process.returncode != 0:
+                                print(f"FFmpeg error: {error.decode()}")
+                                continue
+                            
+                            # Trim MP3 padding for smoother playback (method from cosy-api.py)
+                            trimmed_mp3_data = trim_mp3_padding(mp3_data)
                             
                             # Send MP3 chunk
-                            await websocket.send_bytes(mp3_data)
+                            await websocket.send_bytes(trimmed_mp3_data)
                             
                             # Save MP3 chunk if requested
                             if save_audio_files and chunk_save_folder:
@@ -322,16 +350,16 @@ async def websocket_tts(websocket: WebSocket):
                                 chunk_filepath = os.path.join(chunk_save_folder, chunk_filename)
                                 try:
                                     with open(chunk_filepath, 'wb') as f:
-                                        f.write(mp3_data)
-                                    print(f"[WS-TTS] Saved {chunk_filename} ({len(mp3_data)} bytes)")
+                                        f.write(trimmed_mp3_data)
+                                    print(f"[WS-TTS] Saved {chunk_filename} ({len(trimmed_mp3_data)} bytes)")
                                 except Exception as save_error:
                                     print(f"[WS-TTS] Error saving chunk file: {save_error}")
                             
                             chunk_processing_time = (time.time() - chunk_start_time) * 1000
-                            print(f"[WS-TTS] MP3 chunk {chunk_counter} sent: {len(mp3_data)} bytes, time: {chunk_processing_time:.2f}ms")
+                            print(f"[WS-TTS] MP3 chunk {chunk_counter} sent: {len(trimmed_mp3_data)} bytes, time: {chunk_processing_time:.2f}ms")
                             
-                        except RuntimeError as e:
-                            print(f"MP3 conversion failed for chunk {chunk_counter}: {str(e)}")
+                        except Exception as e:
+                            print(f"Enhanced MP3 conversion failed for chunk {chunk_counter}: {str(e)}")
                             continue
                     else:
                         await websocket.send_text(json.dumps({"error": f"Unsupported audio format: {audio_format}"}))
@@ -345,14 +373,8 @@ async def websocket_tts(websocket: WebSocket):
                 print(f"[WS-TTS] Audio streaming completed in {generation_time:.2f} seconds")
                 print(f"[WS-TTS] Total chunks sent: {chunk_counter}")
                 
-                # Send completion message if needed
-                completion_message = {
-                    "completed": True,
-                    "totalChunks": chunk_counter,
-                    "audioFormat": audio_format,
-                    "outputSampleRate": output_sample_rate
-                }
-                await websocket.send_text(json.dumps(completion_message))
+                # Send an empty chunk to signal completion
+                await websocket.send_bytes(b'')
                 
             except Exception as e:
                 print(f"Error in websocket_tts: {str(e)}")
