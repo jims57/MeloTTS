@@ -99,7 +99,7 @@ async def startup_event():
         global_models[language] = model
         print(f"{language} model loaded")
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"message": "MeloTTS API is running"}
 
