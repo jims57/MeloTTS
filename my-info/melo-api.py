@@ -14,6 +14,14 @@ from melo.api import TTS
 import os
 import asyncio
 
+# Valid API Keys for WebSocket authentication
+VALID_API_KEYS = {
+    "sk-5z6y7x8w9v0u1t2s3r4q5p6o7n8m9l0k1j2i3h4g",
+    "sk-3a4b5c6d7e8f9g0h1i2j3k4l5m6n7o8p9q0r1s2t",
+    "sk-9m8n7b6v5c4x3z2a1s0d9f8g7h6j5k4l3p2o1i0u",
+    "sk-7u6y5t4r3e2w1q0a9s8d7f6g5h4j3k2l1z0x9c8v"
+}
+
 # API model for TTS request
 class TTSRequest(BaseModel):
     text: str
@@ -107,6 +115,16 @@ async def root():
 async def websocket_tts(websocket: WebSocket):
     await websocket.accept()
     print(f"[WS-TTS] WebSocket connection established")
+    
+    # Check X-API-Key header for authorization
+    api_key = websocket.headers.get("x-api-key")
+    if not api_key or api_key not in VALID_API_KEYS:
+        print(f"[WS-TTS] Unauthorized access attempt with API key: {api_key}")
+        await websocket.send_text(json.dumps({"error": "Unauthorized: Invalid or missing X-API-Key header"}))
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+    
+    print(f"[WS-TTS] Authorized connection with valid API key")
     
     try:
         while True:
