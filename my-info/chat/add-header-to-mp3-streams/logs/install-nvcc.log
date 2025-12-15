@@ -1,0 +1,6 @@
+E: Failed to fetch http://archive.ubuntu.com/ubuntu/pool/main/a/alsa-ucm-conf/alsa-ucm-conf_1.2.6.3-1ubuntu1.11_all.deb  404  Not Found [IP: 185.125.190.81 80]
+E: Failed to fetch http://security.ubuntu.com/ubuntu/pool/universe/o/openjdk-8/openjdk-8-jre-headless_8u422-b05-1%7e22.04_amd64.deb  404  Not Found [IP: 185.125.190.81 80]
+E: Failed to fetch http://security.ubuntu.com/ubuntu/pool/main/libs/libsndfile/libsndfile1_1.0.31-2ubuntu0.1_amd64.deb  404  Not Found [IP: 91.189.92.24 80]
+E: Failed to fetch http://security.ubuntu.com/ubuntu/pool/universe/o/openjdk-8/openjdk-8-jre_8u422-b05-1%7e22.04_amd64.deb  404  Not Found [IP: 91.189.92.24 80]
+E: Failed to fetch http://archive.ubuntu.com/ubuntu/pool/main/m/mesa/libgl1-mesa-dev_23.2.1-1ubuntu3.1%7e22.04.2_amd64.deb  404  Not Found [IP: 91.189.92.24 80]
+E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?
