@@ -1,3 +1,10 @@
+"""
+# Author: Jimmy Gan
+# Date: Dec 23, 2025
+# Melo TTS API Server
+# Version: 1.3.3
+# Changes number: 2
+"""
 import torch
 import numpy as np
 import io

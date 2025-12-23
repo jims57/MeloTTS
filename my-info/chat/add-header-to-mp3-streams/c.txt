@@ -1,0 +1,63 @@
+root@ubuntu:~# docker pull d.watchfun.cn/jims57/melo-tts:v1.3
+v1.3: Pulling from jims57/melo-tts
+23828d760c7b: Downloading 
+18ea39f449f2: Downloading 
+4f4fb700ef54: Downloading 
+a2f9ef49a25e: Downloading 
+1c7f2e233b5f: Downloading 
+6d00df402cf8: Downloading 
+fe4f2f514559: Downloading 
+999f45ff216e: Downloading 
+74e0ce3e6cbf: Downloading 
+dfae8e751f33: Downloading 
+6b6f1f09276f: Downloading 
+d9e68ca30619: Downloading 
+02006324a966: Downloading 
+3d1a32501ee0: Downloading 
+d288c7980a63: Downloading 
+45713d170b89: Downloading 
+f721866d12a2: Downloading 
+f25f9e364356: Downloading 
+0dd40b19d7e4: Downloading 
+03c2cb17f080: Downloading 
+51c7e39aafbd: Downloading 
+1311cb24b935: Downloading 
+7b7af44a7557: Downloading 
+fbdb7c06a1a5: Downloading 
+9cc53d5db2fe: Downloading 
+7ac39c150553: Downloading 
+02c11b868e4d: Downloading 
+40bce9133b72: Downloading 
+6ebc30604161: Downloading 
+86ec4c8d136e: Downloading 
+ae4f1b56c148: Downloading 
+032928069400: Downloading 
+87d6d146aab7: Downloading 
+ea8f48694f3d: Downloading 
+71026961bb8e: Downloading 
+83d66a9664f3: Downloading 
+7d8dd7e2f57e: Downloading 
+c36cafae28fe: Downloading 
+f90e97f3f150: Downloading 
+e527f99ca48d: Downloading 
+0fe31888c480: Downloading 
+d04548b4c850: Downloading 
+6048eb210a63: Downloading 
+3511817454e9: Downloading 
+df26a4a09573: Downloading 
+1161446038f5: Downloading 
+948c739af44c: Downloading 
+6867da20795c: Downloading 
+a11733563bf6: Downloading 
+b80e6a1a5c36: Downloading 
+945fe3823763: Downloading 
+8a986d053d60: Download complete 
+ff921baa8efb: Download complete 
+unknown blob
+
+
+root@ubuntu:~# docker pull d.watchfun.cn/jims57/minimax-api:v1.11.6
+v1.11.6: Pulling from jims57/minimax-api
+Digest: sha256:29d5677784e5fc240c42af6c19c095559e5a9d9ed7cc1fb471b45a695578aaaf
+Status: Image is up to date for d.watchfun.cn/jims57/minimax-api:v1.11.6
+d.watchfun.cn/jims57/minimax-api:v1.11.6
