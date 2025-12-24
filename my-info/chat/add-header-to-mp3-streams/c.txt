@@ -61,3 +61,14 @@ v1.11.6: Pulling from jims57/minimax-api
 Digest: sha256:29d5677784e5fc240c42af6c19c095559e5a9d9ed7cc1fb471b45a695578aaaf
 Status: Image is up to date for d.watchfun.cn/jims57/minimax-api:v1.11.6
 d.watchfun.cn/jims57/minimax-api:v1.11.6
+
+
+{
+     "text": "青石板上泛着水光，雨丝斜斜地织着帘子。我撑一把油纸伞，踩着湿润的石板路，听脚步声在巷子里轻轻回响。",
+     "audioFormat":"mp3",
+     "saveAudioFiles":false,
+     "speakerId":1,
+     "outputSampleRate":16000,
+     "startTimeId":1752634809864,
+     "messageId":4     
+}

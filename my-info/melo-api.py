@@ -2,8 +2,10 @@
 # Author: Jimmy Gan
 # Date: Dec 23, 2025
 # Melo TTS API Server
-# Version: 1.3.3
+# Version: 1.3.4
 # Changes number: 2
+# head -n 7 melo-api.py
+# cd ~/MeloTTS &&/root/MeloTTS/melotts/bin/python melo-api.py --port 9001
 """
 import torch
 import numpy as np
@@ -562,14 +564,23 @@ async def websocket_tts(websocket: WebSocket):
                                         continue
                                 
                                 if mp3_data:
-                                    # Send MP3/WAV chunk immediately
-                                    await websocket.send_bytes(mp3_data)
+                                    # 根据是否有消息头部决定发送格式
+                                    if has_message_headers:
+                                        # 添加消息头部到MP3数据前面
+                                        header_bytes = create_header_bytes(start_time_id, message_id)
+                                        data_to_send = header_bytes + mp3_data
+                                        await websocket.send_bytes(data_to_send)
+                                        print(f"[WS-TTS] 📦 MP3 chunk {chunk_counter} sent with header: {len(header_bytes)} header + {len(mp3_data)} MP3 = {len(data_to_send)} total bytes")
+                                    else:
+                                        # 直接发送MP3数据
+                                        await websocket.send_bytes(mp3_data)
+                                        print(f"[WS-TTS] 📦 MP3 chunk {chunk_counter} sent: {len(mp3_data)} bytes")
                                     
                                     # Track first chunk sent timing
                                     if not first_chunk_sent:
                                         first_chunk_sent_time = time.time()
                                         first_chunk_sent_since_request = (first_chunk_sent_time - start_time) * 1000
-                                        print(f"[WS-TTS] 🎯 First chunk sent since request: {first_chunk_sent_since_request:.2f}ms")
+                                        print(f"[WS-TTS] First chunk sent since request: {first_chunk_sent_since_request:.2f}ms")
                                         first_chunk_sent = True
                                     
                                     # Save MP3 chunk if requested
@@ -578,13 +589,20 @@ async def websocket_tts(websocket: WebSocket):
                                         chunk_filepath = os.path.join(chunk_save_folder, chunk_filename)
                                         try:
                                             with open(chunk_filepath, 'wb') as f:
-                                                f.write(mp3_data)
-                                            print(f"[WS-TTS] Saved {chunk_filename} ({len(mp3_data)} bytes)")
+                                                # 保存与发送给客户端相同的数据格式
+                                                if has_message_headers:
+                                                    # 保存带头部的数据
+                                                    header_bytes = create_header_bytes(start_time_id, message_id)
+                                                    f.write(header_bytes + mp3_data)
+                                                    print(f"[WS-TTS] Saved {chunk_filename} with header ({len(header_bytes + mp3_data)} bytes)")
+                                                else:
+                                                    # 保存纯MP3数据
+                                                    f.write(mp3_data)
+                                                    print(f"[WS-TTS] Saved {chunk_filename} ({len(mp3_data)} bytes)")
                                         except Exception as save_error:
                                             print(f"[WS-TTS] Error saving chunk file: {save_error}")
                                     
                                     chunk_processing_time = (time.time() - chunk_start_time) * 1000
-                                    print(f"[WS-TTS] 📦 MP3 chunk {chunk_counter} sent: {len(mp3_data)} bytes, time: {chunk_processing_time:.2f}ms")
                             
                             else:
                                 await websocket.send_text(json.dumps({"error": f"Unsupported audio format: {audio_format}"}))
