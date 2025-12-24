@@ -6,6 +6,9 @@
 # Changes number:39
 # head -n 7 melo-api.py
 # cd ~/MeloTTS &&/root/MeloTTS/melotts/bin/python melo-api.py --port 9001
+# free -h
+# df -h
+# docker exec -it melo-tts /bin/bash
 """
 import torch
 import numpy as np
