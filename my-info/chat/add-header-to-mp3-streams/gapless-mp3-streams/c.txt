@@ -60,3 +60,9 @@ c. change the @build-java-based-aar name into build_java_based_aar_for_mp3_strea
      "startTimeId":1752634809864,
      "messageId":4     
 }
+
+
+//>>chat
+a. add a new get api called /apiDoc in  @melo-api.py to show this html @api_documentation.html  , you can reference my another api @api.py how to show it
+b. update   @api_documentation.html accordingly to reflect the api in @melo-api.py 
+c.i found that the player was still playing mp3 streams, but the status in ui show 已停止 in advance , see image 1, fyi

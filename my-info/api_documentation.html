@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MeloTTS API 文档</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .contact-notice {
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 1.1em;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        .subtitle {
+            text-align: center;
+            color: #7f8c8d;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        .api-section {
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .api-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1.1em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .api-header:hover {
+            background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+        }
+        .api-content {
+            display: none;
+            padding: 20px;
+            background-color: #fafafa;
+        }
+        .method {
+            background-color: #27ae60;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+        .method.post { background-color: #e74c3c; }
+        .method.get { background-color: #3498db; }
+        .method.websocket { background-color: #f39c12; }
+        .endpoint {
+            font-family: 'Courier New', monospace;
+            background-color: #ecf0f1;
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .code-block {
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 10px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            white-space: pre-wrap;
+        }
+        .success { border-left: 4px solid #27ae60; }
+        .error { border-left: 4px solid #e74c3c; }
+        .warning { border-left: 4px solid #f39c12; }
+        .info { border-left: 4px solid #3498db; }
+        .parameter {
+            background-color: #fff;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+        }
+        .param-name {
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        .param-type {
+            color: #8e44ad;
+            font-style: italic;
+        }
+        .error-codes {
+            margin-top: 15px;
+        }
+        .error-code {
+            background-color: #fff5f5;
+            border: 1px solid #fed7d7;
+            padding: 8px;
+            margin: 5px 0;
+            border-radius: 4px;
+        }
+        .toggle-icon {
+            transition: transform 0.3s ease;
+        }
+        .toggle-icon.expanded {
+            transform: rotate(90deg);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="contact-notice">
+            📞 如需获取API密钥，请联系Jimmy开发者
+        </div>
+        
+        <h1>🎙️ MeloTTS API 文档</h1>
+        <p class="subtitle">作者：Jimmy Gan | 版本：v1.3.6 | 更新时间：2025-12-24</p>
+        
+        <!-- API 1: TTS WebSocket接口 -->
+        <div class="api-section">
+            <div class="api-header" onclick="toggleSection(this)">
+                <div>
+                    <span class="method websocket">WebSocket</span>
+                    <span>/tts - TTS WebSocket接口</span>
+                </div>
+                <span class="toggle-icon">▶</span>
+            </div>
+            <div class="api-content">
+                <h3>📋 接口描述</h3>
+                <p>通过WebSocket连接进行实时TTS语音合成，支持流式数据传输</p>
+                
+                <h3>📊 连接参数</h3>
+                <div class="parameter">
+                    <span class="param-name">x-api-key</span> 
+                    <span class="param-type">(Header, 必需)</span> - API密钥
+                </div>
+                
+                <h3>📝 WebSocket消息格式</h3>
+                <div class="parameter">
+                    <span class="param-name">text</span> 
+                    <span class="param-type">(String, 必需)</span> - 要合成的文本内容<br>
+                    <span class="param-constraint">类型: String | 必填: 是 | 示例: "你好，这是一段测试文本。"</span>
+                </div>
+                <div class="parameter">
+                    <span class="param-name">language</span> 
+                    <span class="param-type">(String, 可选)</span> - 语言代码<br>
+                    <span class="param-constraint">类型: String | 必填: 否 | 默认: "zh" | 可选值: ["zh", "en", "jp", "kr", "fr", "es"]</span><br>
+                    zh=中文, en=英语, jp=日语, kr=韩语, fr=法语, es=西班牙语
+                </div>
+                <div class="parameter">
+                    <span class="param-name">speakerId</span> 
+                    <span class="param-type">(Integer, 可选)</span> - 说话人ID<br>
+                    <span class="param-constraint">类型: Integer | 必填: 否 | 默认: 0</span><br>
+                    zh: 0-2, en: 0-4, jp/kr/fr/es: 0
+                </div>
+                <div class="parameter">
+                    <span class="param-name">outputSampleRate</span> 
+                    <span class="param-type">(Integer, 可选)</span> - 输出音频的采样率<br>
+                    <span class="param-constraint">类型: Integer | 必填: 否 | 默认: 22050 | 可选值: [16000, 22050, 24000, 44100]</span>
+                </div>
+                <div class="parameter">
+                    <span class="param-name">audioFormat</span> 
+                    <span class="param-type">(String, 可选)</span> - 输出音频格式<br>
+                    <span class="param-constraint">类型: String | 必填: 否 | 默认: "mp3" | 可选值: ["mp3", "pcm"]</span>
+                </div>
+                <div class="parameter">
+                    <span class="param-name">chunkDuration</span> 
+                    <span class="param-type">(Float, 可选)</span> - MP3 chunk时长（秒）<br>
+                    <span class="param-constraint">类型: Float | 必填: 否 | 默认: 0.25 | 示例: 0.5</span><br>
+                    值越小响应越快，控制MP3 chunk发送频率
+                </div>
+                <div class="parameter">
+                    <span class="param-name">speed</span> 
+                    <span class="param-type">(Float, 可选)</span> - 合成音频的语速<br>
+                    <span class="param-constraint">类型: Float | 必填: 否 | 默认: 1.0 | 范围: [0.5, 2.0] | 示例: 1.5</span><br>
+                    取值越大，语速越快。1.0为正常语速，0.5为半速，2.0为两倍速。
+                </div>
+                <div class="parameter">
+                    <span class="param-name">startTimeId</span> 
+                    <span class="param-type">(Long, 可选)</span> - 开始时间ID，用于消息头<br>
+                    <span class="param-constraint">类型: Long | 必填: 否 | 示例: 1752634809864</span>
+                </div>
+                <div class="parameter">
+                    <span class="param-name">messageId</span> 
+                    <span class="param-type">(Integer, 可选)</span> - 消息ID，用于消息头<br>
+                    <span class="param-constraint">类型: Integer | 必填: 否 | 示例: 4</span>
+                </div>
+                <div class="parameter">
+                    <span class="param-name">saveAudioFiles</span> 
+                    <span class="param-type">(Boolean, 可选)</span> - 是否保存音频文件到服务器<br>
+                    <span class="param-constraint">类型: Boolean | 必填: 否 | 默认: false</span>
+                </div>
+                
+                <h3>📤 TTS生成请求示例</h3>
+                <div class="code-block info">
+WebSocket连接: ws://your-server:port/tts
+Headers: {"x-api-key": "sk-5z6y7x8w9v0u1t2s3r4q5p6o7n8m9l0k1j2i3h4g"}
+
+发送TTS生成消息:
+{
+    "text": "你好，这是一段测试文本。",
+    "language": "zh",
+    "speakerId": 0,
+    "outputSampleRate": 16000,
+    "audioFormat": "mp3",
+    "chunkDuration": 0.25,
+    "speed": 1.0,
+    "saveAudioFiles": false,
+    "startTimeId": 1752634809864,
+    "messageId": 4
+}
+                </div>
+                
+                <h3>📦 消息头部格式</h3>
+                <p>当同时提供 startTimeId 和 messageId 时，每个音频chunk前会添加12字节头部：</p>
+                <ul>
+                    <li>前8字节: startTimeId (Big-Endian Long)</li>
+                    <li>后4字节: messageId (Big-Endian Integer)</li>
+                </ul>
+                
+                <h3>✅ 成功响应</h3>
+                <p>返回流式二进制音频数据</p>
+                
+                <h3>❌ 错误响应</h3>
+                <div class="error-codes">
+                    <div class="error-code">
+                        <strong>错误:</strong> 缺少API密钥<br>
+                        <code>{"error": "Missing x-api-key header"}</code>
+                    </div>
+                    <div class="error-code">
+                        <strong>错误:</strong> API密钥无效<br>
+                        <code>{"error": "Invalid API key"}</code>
+                    </div>
+                    <div class="error-code">
+                        <strong>错误:</strong> 文本必填<br>
+                        <code>{"error": "Text is required"}</code>
+                    </div>
+                    <div class="error-code">
+                        <strong>错误:</strong> 不支持的语言<br>
+                        <code>{"error": "Language 'XX' not supported"}</code>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- API 2: API文档 -->
+        <div class="api-section">
+            <div class="api-header" onclick="toggleSection(this)">
+                <div>
+                    <span class="method get">GET</span>
+                    <span>/apiDoc - API文档接口</span>
+                </div>
+                <span class="toggle-icon">▶</span>
+            </div>
+            <div class="api-content">
+                <h3>📋 接口描述</h3>
+                <p>获取API文档HTML页面</p>
+                
+                <h3>📊 请求参数</h3>
+                <p>无需参数</p>
+                
+                <h3>✅ 成功响应</h3>
+                <p>返回HTML格式的API文档页面</p>
+            </div>
+        </div>
+
+        <!-- 认证信息 -->
+        <div class="api-section">
+            <div class="api-header" onclick="toggleSection(this)">
+                <div>
+                    <span class="method">🔐</span>
+                    <span>认证信息</span>
+                </div>
+                <span class="toggle-icon">▶</span>
+            </div>
+            <div class="api-content">
+                <h3>API密钥示例</h3>
+                <p>请在WebSocket连接头部包含有效的API密钥：</p>
+                <div class="code-block">
+x-api-key: sk-5z6y7x8w9v0u1t2s3r4q5p6o7n8m9l0k1j2i3h4g
+                </div>
+                
+                <h3>认证说明</h3>
+                <div class="warning">
+                    <p>TTS WebSocket接口需要在连接头部提供API密钥</p>
+                    <p>上述示例中的API密钥仅为演示，实际使用请联系Jimmy获取真实密钥</p>
+                </div>
+                
+                <h3>支持的语言</h3>
+                <table>
+                    <tr><th>语言代码</th><th>语言</th><th>speakerId范围</th></tr>
+                    <tr><td>zh</td><td>中文</td><td>0-2</td></tr>
+                    <tr><td>en</td><td>英语</td><td>0-4</td></tr>
+                    <tr><td>jp</td><td>日语</td><td>0</td></tr>
+                    <tr><td>kr</td><td>韩语</td><td>0</td></tr>
+                    <tr><td>fr</td><td>法语</td><td>0</td></tr>
+                    <tr><td>es</td><td>西班牙语</td><td>0</td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function toggleSection(header) {
+            const content = header.nextElementSibling;
+            const icon = header.querySelector('.toggle-icon');
+            
+            if (content.style.display === 'none' || content.style.display === '') {
+                content.style.display = 'block';
+                icon.textContent = '▼';
+                icon.classList.add('expanded');
+            } else {
+                content.style.display = 'none';
+                icon.textContent = '▶';
+                icon.classList.remove('expanded');
+            }
+        }
+        
+        // 默认折叠所有区域
+        document.addEventListener('DOMContentLoaded', function() {
+            const contents = document.querySelectorAll('.api-content');
+            contents.forEach(content => {
+                content.style.display = 'none';
+            });
+        });
+    </script>
+</body>
+</html>

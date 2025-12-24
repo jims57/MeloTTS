@@ -3,7 +3,7 @@
 # Date: Dec 23, 2025
 # Melo TTS API Server
 # Version: 1.3.6
-# Changes number:36
+# Changes number:38
 # head -n 7 melo-api.py
 # cd ~/MeloTTS &&/root/MeloTTS/melotts/bin/python melo-api.py --port 9001
 """
@@ -16,7 +16,7 @@ import argparse
 import sys
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 import uvicorn
 import time
@@ -1116,6 +1116,37 @@ class GaplessMP3Encoder:
                 pass
             self.process = None
         print(f"[GaplessMP3] Encoder closed, total writes: {self.frames_written}")
+
+@app.get("/apiDoc")
+async def get_api_documentation():
+    """
+    API Documentation Endpoint
+    
+    Returns:
+    - HTML response with API documentation
+    """
+    try:
+        # 获取API文档HTML文件路径
+        html_file_path = os.path.join(os.path.dirname(__file__), "api_documentation.html")
+        
+        # 检查文件是否存在
+        if not os.path.exists(html_file_path):
+            return HTMLResponse(
+                content="<html><body><h1>API Documentation not found</h1></body></html>",
+                status_code=404
+            )
+        
+        # 读取并返回HTML内容
+        with open(html_file_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        return HTMLResponse(content=html_content, status_code=200)
+        
+    except Exception as e:
+        return HTMLResponse(
+            content=f"<html><body><h1>Error loading API documentation: {str(e)}</h1></body></html>",
+            status_code=500
+        )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MeloTTS API Server')
