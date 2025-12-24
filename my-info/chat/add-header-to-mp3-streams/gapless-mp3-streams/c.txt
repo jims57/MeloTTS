@@ -28,3 +28,20 @@ c. make sure keep other logic of mp3 intact
 //>>chat 2：
 a.it is no truly gapless mp3 streams, when i use android mp3 player demo @MainActivity.java to  play these mp3 streams, i can still hear giltch, though it is better than it was. I am sure the mp3 player demo android app is normal, for when i use the same demo to play minimax mp3 streams(truly raw mp3 streams) from our minimax api @api.py#L116-904 , it can play smooth and gapless
 b. the two @hex-3.txt@hex-4.txt are two of these mp3(note that the first 12 btyes: 00 00 01 98 11 2C DE 08 00 00 00 04 is normal header since we use @c.txt#L1-9 with @c.txt#L7-8 to post, which meet our use case). you found that these mp3 streams have AA AA or 55 55 in the end of these mp3 streams, which might be the reason why we cannot get gapless mp3 streams?
+
+
+//>>chat 3
+a.i can see a noticeable improvment to glitch problem, it is more gapless nows, when i use my android demo @MainActivity.java to play these so-called mp3 streams(again, i am sure the android demo is normal, for it can play my minimax tts mp3 streams in gapless way which has header info with the same exact logic )
+b. try to check the code @melo-api.py carefully, i want a truly consistent, gapless mp3 steams with only exactly audio frames without any additional info(such as ID3 tag, xing, padding etc.) except our biz requirement about startTimeId and messageId @MainActivity.java#L439-440 
+
+//>>chat 4
+doesn't truly fix it. 
+a. if i am right, mp3 frame itself has info about sample rate, size etc. can we use this info to handle it to get gapless mp3 streams.
+b. since length these pcm streams from our tts vary, we should  use the remaining pcm data into next pcm streams(i mean we need perfect frame boundary)
+c.if i am right, if we need consistent mp3 streams, we need to use the same instance of encoder and keeping the state open, so that these converted mp3 streams consistent internally(gapless palying is our goal)
+
+//>>chat 5
+very very good. it works, these mp3 streams are gapless, i have tested them. now:
+a.update   @how-to-convert-pcm-streams-to-gapless-mp3-streams.md using markdown to tell me in English how to make the conversion from pcm streams into gapless mp3 streams with gapless playing. i like to note down.
+b. see the /tts api in@melo-api.py and update my android code @MainActivity.java#L424-440 to reflect the api post data(using all possible fields so that the demo is more robust)
+c. change the @build-java-based-aar name into build_java_based_aar_for_mp3_streams_player and run cmd to run @build_java_based_aar_for_mp3_streams_playing.sh to make sure everything is correct

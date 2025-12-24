@@ -3,7 +3,7 @@
 # Date: Dec 23, 2025
 # Melo TTS API Server
 # Version: 1.3.5
-# Changes number:37
+# Changes number:39
 # head -n 7 melo-api.py
 # cd ~/MeloTTS &&/root/MeloTTS/melotts/bin/python melo-api.py --port 9001
 """
@@ -356,6 +356,12 @@ async def websocket_tts(websocket: WebSocket):
                 first_chunk_sent_since_request = None
                 chunk_counter = 0
                 
+                # 创建持久的MP3编码器（用于无缝MP3流）
+                mp3_encoder = None
+                if audio_format.lower() == "mp3":
+                    mp3_encoder = GaplessMP3Encoder(sample_rate=output_sample_rate, bitrate='128k')
+                    print(f"[WS-TTS] Created GaplessMP3Encoder for seamless streaming")
+                
                 # Process each text segment immediately
                 for segment_idx, segment_text in enumerate(text_segments):
                     segment_start_time = time.time()
@@ -482,80 +488,36 @@ async def websocket_tts(websocket: WebSocket):
                                 print(f"[WS-TTS] Send time: {chunk_processing_time:.2f}ms")
                                 
                             elif audio_format.lower() == "mp3":
-                                # Convert chunk to MP3 with fallback when FFmpeg is not available
+                                # 使用持久的GaplessMP3Encoder进行无缝编码
                                 import soundfile as sf
                                 
                                 # Check if audio is valid
                                 if len(audio_chunk) == 0 or np.isnan(audio_chunk).any():
                                     continue
                                 
-                                # Normalize audio to increase volume before writing to MP3
+                                # 设置音量倍数
                                 volume_multiplier = 2.0
-                                # Apply higher volume for Chinese language MP3
                                 if language == "ZH":
                                     volume_multiplier = 8.47  # Equivalent to 13dB increase
-                                    
-                                # Log volume multiplier value
-                                print(f"Volume multiplier: {volume_multiplier:.1f}")
-                                    
-                                normalized_audio = audio_chunk * volume_multiplier
-                                # Clip to avoid distortion
-                                normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
                                 
-                                # Try FFmpeg first, fallback to soundfile if FFmpeg not available
                                 mp3_data = None
                                 try:
-                                    import subprocess
-                                    import shutil
+                                    # 使用持久编码器进行无缝编码
+                                    mp3_data = mp3_encoder.feed_pcm(audio_chunk, volume_multiplier)
                                     
-                                    # Check if ffmpeg is available
-                                    if shutil.which('ffmpeg') is None:
-                                        raise FileNotFoundError("FFmpeg not found")
+                                    if mp3_data:
+                                        print(f"[WS-TTS] GaplessMP3: fed {len(audio_chunk)} samples, got {len(mp3_data)} bytes")
+                                    else:
+                                        print(f"[WS-TTS] GaplessMP3: fed {len(audio_chunk)} samples, buffering...")
+                                        continue  # 缓冲中，等待更多数据
                                     
-                                    # Use FFmpeg to convert WAV to MP3 with optimized settings
-                                    process = subprocess.Popen(
-                                        [
-                                            'ffmpeg',
-                                            '-f', 's16le',  # 16-bit little-endian PCM
-                                            '-ar', str(output_sample_rate),  # Input sample rate
-                                            '-ac', '1',  # Mono
-                                            '-i', 'pipe:0',  # Read from stdin
-                                            '-c:a', 'libmp3lame',  # MP3 encoder
-                                            '-b:a', '128k',  # 128 kbps
-                                            '-q:a', '2',  # Quality setting
-                                            '-write_id3v1', '0',  # No ID3v1
-                                            '-write_id3v2', '0',  # No ID3v2
-                                            '-id3v2_version', '0',  # No ID3v2
-                                            '-write_xing', '0',  # No Xing header
-                                            '-fflags', '+bitexact',
-                                            '-f', 'mp3',  # MP3 format
-                                            'pipe:1'  # Output to stdout
-                                        ],
-                                        stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE
-                                    )
-                                    
-                                    # 将PCM数据对齐到1152样本（MP3帧大小），确保无缝拼接
-                                    aligned_audio = align_pcm_to_mp3_frame_size(normalized_audio, output_sample_rate)
-                                    normalized_pcm = (aligned_audio * 32767).astype(np.int16)
-                                    mp3_data, error = process.communicate(input=normalized_pcm.tobytes())
-                                    
-                                    if process.returncode != 0:
-                                        print(f"FFmpeg error: {error.decode()}")
-                                        raise Exception("FFmpeg conversion failed")
-                                    
-                                    # 提取纯净的MP3音频帧，用于无缝拼接
-                                    mp3_data = extract_raw_mp3_frames(mp3_data, skip_encoder_delay_frames=1)
-                                    print(f"[WS-TTS] MP3 conversion via FFmpeg successful, raw frames extracted")
-                                    
-                                except Exception as ffmpeg_error:
-                                    print(f"[WS-TTS] FFmpeg conversion failed: {str(ffmpeg_error)}")
-                                    print(f"[WS-TTS] Falling back to WAV format for chunk {chunk_counter}")
+                                except Exception as encoder_error:
+                                    print(f"[WS-TTS] GaplessMP3 encoder error: {str(encoder_error)}")
                                     
                                     # Fallback: send as WAV format
                                     try:
                                         wav_io = io.BytesIO()
+                                        normalized_audio = np.clip(audio_chunk * volume_multiplier, -1.0, 1.0)
                                         sf.write(wav_io, normalized_audio, output_sample_rate, format="WAV")
                                         mp3_data = wav_io.getvalue()
                                         wav_io.close()
@@ -619,6 +581,24 @@ async def websocket_tts(websocket: WebSocket):
                         print(f"Error processing segment {segment_idx+1}: {str(segment_error)}")
                         continue
                 
+                # 刷新MP3编码器，获取剩余数据
+                if mp3_encoder is not None:
+                    try:
+                        final_mp3_data = mp3_encoder.flush()
+                        if final_mp3_data:
+                            if has_message_headers:
+                                header_bytes = create_header_bytes(start_time_id, message_id)
+                                data_to_send = header_bytes + final_mp3_data
+                                await websocket.send_bytes(data_to_send)
+                                print(f"[WS-TTS] GaplessMP3: flushed final {len(final_mp3_data)} bytes with header")
+                            else:
+                                await websocket.send_bytes(final_mp3_data)
+                                print(f"[WS-TTS] GaplessMP3: flushed final {len(final_mp3_data)} bytes")
+                            chunk_counter += 1
+                        mp3_encoder.close()
+                    except Exception as flush_error:
+                        print(f"[WS-TTS] GaplessMP3 flush error: {str(flush_error)}")
+                
                 # Log completion
                 generation_time = time.time() - start_time
                 print(f"[WS-TTS] 🏁 Audio streaming completed in {generation_time:.2f} seconds")
@@ -668,6 +648,21 @@ async def websocket_tts(websocket: WebSocket):
     except Exception as e:
         print(f"[WS-TTS] WebSocket error: {str(e)}")
 
+def is_xing_frame(data, pos):
+    """
+    检查指定位置的帧是否为Xing/Info帧 (VBR元数据帧)
+    
+    Args:
+        data: MP3数据
+        pos: 帧起始位置
+    
+    Returns:
+        True如果是Xing/Info帧
+    """
+    search_range = data[pos:pos+200]
+    return b'Xing' in search_range or b'Info' in search_range or b'LAME' in search_range
+
+
 def find_lame_tag_position(data):
     """
     查找LAME标签在数据中的位置
@@ -700,10 +695,10 @@ def find_lame_tag_position(data):
 def extract_raw_mp3_frames(mp3_data, skip_encoder_delay_frames=1):
     """
     从MP3数据中提取纯净的音频帧，用于无缝拼接
-    - 跳过编码器延迟帧（LAME编码器通常在开头添加576样本的延迟）
+    - 跳过ID3头部、Xing/Info/LAME元数据帧
+    - 跳过编码器延迟帧
     - 只保留有效的MP3音频帧
-    - 移除所有非音频数据（ID3标签、Xing头、填充等）
-    - 截断LAME标签及其后的填充字节
+    - 截断末尾的LAME标签及填充字节
     
     Args:
         mp3_data: 原始MP3数据
@@ -716,38 +711,43 @@ def extract_raw_mp3_frames(mp3_data, skip_encoder_delay_frames=1):
         return mp3_data
     
     data = bytes(mp3_data)
+    pos = 0
     
-    # 查找LAME标签位置，截断其后的所有数据
+    # 步骤1: 跳过ID3v2头部
+    if data[:3] == b'ID3' and len(data) >= 10:
+        id3_size = ((data[6] & 0x7F) << 21) | ((data[7] & 0x7F) << 14) | \
+                   ((data[8] & 0x7F) << 7) | (data[9] & 0x7F)
+        pos = 10 + id3_size
+        print(f"[WS-TTS] Skipped ID3v2 header: {pos} bytes")
+    
+    # 步骤2: 查找末尾LAME标签位置，确定有效数据结束位置
+    end_pos = len(data)
     lame_pos = find_lame_tag_position(data)
-    if lame_pos != -1:
-        # 找到LAME标签所在的帧的起始位置
-        # 向前搜索最近的帧头
+    if lame_pos != -1 and lame_pos > pos:
+        # 向前搜索LAME标签所在帧的起始位置
         frame_start = lame_pos
-        while frame_start > 0:
+        while frame_start > pos:
             if data[frame_start] == 0xFF and frame_start + 1 < len(data) and (data[frame_start + 1] & 0xE0) == 0xE0:
                 break
             frame_start -= 1
         
-        # 截断到包含LAME标签的帧之前
-        if frame_start > 0:
-            data = data[:frame_start]
-            print(f"[WS-TTS] Truncated MP3 data at LAME tag position {lame_pos}, new length: {len(data)}")
+        if frame_start > pos:
+            end_pos = frame_start
+            print(f"[WS-TTS] Truncated at LAME tag, end_pos: {end_pos} (original: {len(data)})")
     
     frames = []
-    pos = 0
     frame_count = 0
-    skipped_frames = 0
+    skipped_delay_frames = 0
+    skipped_xing_frames = 0
     
-    while pos < len(data) - 4:
-        # 查找MP3帧同步字（0xFF后跟0xFB/0xFA/0xF3/0xF2等）
-        # MP3帧同步：前11位为1（0xFFE0或更高）
+    while pos < end_pos - 4:
+        # 查找MP3帧同步字
         if data[pos] == 0xFF and (data[pos + 1] & 0xE0) == 0xE0:
             # 解析MP3帧头
             header = (data[pos] << 24) | (data[pos + 1] << 16) | (data[pos + 2] << 8) | data[pos + 3]
             
-            # 提取帧头信息
-            version = (header >> 19) & 0x03  # MPEG版本
-            layer = (header >> 17) & 0x03    # Layer
+            version = (header >> 19) & 0x03
+            layer = (header >> 17) & 0x03
             bitrate_index = (header >> 12) & 0x0F
             sample_rate_index = (header >> 10) & 0x03
             padding = (header >> 9) & 0x01
@@ -757,22 +757,36 @@ def extract_raw_mp3_frames(mp3_data, skip_encoder_delay_frames=1):
                 pos += 1
                 continue
             
-            # 计算帧长度
             frame_length = calculate_mp3_frame_length(version, layer, bitrate_index, sample_rate_index, padding)
             
-            if frame_length > 0 and pos + frame_length <= len(data):
-                # 跳过编码器延迟帧
-                if skipped_frames < skip_encoder_delay_frames:
-                    skipped_frames += 1
+            if frame_length > 0 and pos + frame_length <= end_pos:
+                # 检查是否为Xing/Info/LAME元数据帧
+                if is_xing_frame(data, pos):
+                    skipped_xing_frames += 1
                     pos += frame_length
                     continue
                 
-                # 提取帧数据
-                frame_data = data[pos:pos + frame_length]
+                # 跳过编码器延迟帧
+                if skipped_delay_frames < skip_encoder_delay_frames:
+                    skipped_delay_frames += 1
+                    pos += frame_length
+                    continue
                 
-                # 保存有效帧
-                frames.append(frame_data)
-                frame_count += 1
+                # 验证下一帧也是有效的MP3帧（双重验证）
+                next_pos = pos + frame_length
+                if next_pos < end_pos - 4:
+                    next_header = data[next_pos:next_pos+4]
+                    if len(next_header) >= 4 and next_header[0] == 0xFF and (next_header[1] & 0xE0) == 0xE0:
+                        # 下一帧也有效，保存当前帧
+                        frames.append(data[pos:pos + frame_length])
+                        frame_count += 1
+                    else:
+                        # 下一帧无效，可能是最后一帧或损坏数据，跳过
+                        pass
+                else:
+                    # 文件末尾，不保存最后一帧（可能包含填充）
+                    pass
+                
                 pos += frame_length
             else:
                 pos += 1
@@ -780,7 +794,7 @@ def extract_raw_mp3_frames(mp3_data, skip_encoder_delay_frames=1):
             pos += 1
     
     if frame_count > 0:
-        print(f"[WS-TTS] Extracted {frame_count} MP3 frames, skipped {skipped_frames} delay frames")
+        print(f"[WS-TTS] Extracted {frame_count} MP3 frames, skipped {skipped_delay_frames} delay + {skipped_xing_frames} xing frames")
     
     return b''.join(frames)
 
@@ -867,6 +881,235 @@ def align_pcm_to_mp3_frame_size(pcm_samples, sample_rate):
         return padded_pcm
     
     return pcm_samples
+
+
+class GaplessMP3Encoder:
+    """
+    无缝MP3编码器 - 保持单一FFmpeg进程，实现真正的无缝MP3流
+    
+    关键特性:
+    1. 保持单一编码器实例，维护内部状态一致性
+    2. PCM缓冲区处理帧边界对齐（1152样本）
+    3. 只输出纯净的MP3音频帧，无元数据
+    """
+    
+    MP3_FRAME_SAMPLES = 1152  # MPEG-1 Layer III每帧样本数
+    
+    def __init__(self, sample_rate=24000, bitrate='128k'):
+        self.sample_rate = sample_rate
+        self.bitrate = bitrate
+        self.process = None
+        self.pcm_buffer = np.array([], dtype=np.float32)  # PCM缓冲区
+        self.mp3_buffer = b''  # MP3输出缓冲区
+        self.is_first_chunk = True
+        self.frames_written = 0
+        
+    def start(self):
+        """启动FFmpeg编码器进程"""
+        import subprocess
+        import shutil
+        
+        if shutil.which('ffmpeg') is None:
+            raise FileNotFoundError("FFmpeg not found")
+        
+        # 启动持久的FFmpeg进程
+        self.process = subprocess.Popen(
+            [
+                'ffmpeg',
+                '-f', 's16le',
+                '-ar', str(self.sample_rate),
+                '-ac', '1',
+                '-i', 'pipe:0',
+                '-c:a', 'libmp3lame',
+                '-b:a', self.bitrate,
+                '-q:a', '2',
+                '-write_id3v1', '0',
+                '-write_id3v2', '0',
+                '-id3v2_version', '0',
+                '-write_xing', '0',
+                '-fflags', '+bitexact',
+                '-f', 'mp3',
+                'pipe:1'
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0  # 无缓冲，实时输出
+        )
+        print(f"[GaplessMP3] Encoder started: {self.sample_rate}Hz, {self.bitrate}")
+        
+    def feed_pcm(self, pcm_float, volume_multiplier=1.0):
+        """
+        输入PCM数据，返回可用的MP3帧
+        
+        Args:
+            pcm_float: float32 PCM数据 [-1.0, 1.0]
+            volume_multiplier: 音量倍数
+        
+        Returns:
+            bytes: 纯净的MP3音频帧数据
+        """
+        if self.process is None:
+            self.start()
+        
+        # 应用音量并裁剪
+        audio = pcm_float * volume_multiplier
+        audio = np.clip(audio, -1.0, 1.0)
+        
+        # 添加到PCM缓冲区
+        self.pcm_buffer = np.concatenate([self.pcm_buffer, audio])
+        
+        # 计算可以编码的完整帧数
+        complete_frames = len(self.pcm_buffer) // self.MP3_FRAME_SAMPLES
+        
+        if complete_frames == 0:
+            return b''  # 缓冲区不足一帧
+        
+        # 取出完整帧的样本
+        samples_to_encode = complete_frames * self.MP3_FRAME_SAMPLES
+        pcm_to_encode = self.pcm_buffer[:samples_to_encode]
+        self.pcm_buffer = self.pcm_buffer[samples_to_encode:]  # 保留剩余样本
+        
+        # 转换为16位PCM并写入编码器
+        pcm_int16 = (pcm_to_encode * 32767).astype(np.int16)
+        self.process.stdin.write(pcm_int16.tobytes())
+        self.process.stdin.flush()
+        
+        # 非阻塞读取MP3输出
+        import select
+        mp3_output = b''
+        
+        while True:
+            # 检查是否有数据可读（非阻塞）
+            readable, _, _ = select.select([self.process.stdout], [], [], 0.01)
+            if not readable:
+                break
+            
+            chunk = self.process.stdout.read(4096)
+            if not chunk:
+                break
+            mp3_output += chunk
+        
+        if mp3_output:
+            # 提取纯净的MP3帧
+            clean_frames = self._extract_audio_frames(mp3_output)
+            self.frames_written += 1
+            return clean_frames
+        
+        return b''
+    
+    def flush(self):
+        """
+        刷新编码器，获取剩余的MP3数据
+        
+        Returns:
+            bytes: 剩余的MP3帧数据
+        """
+        if self.process is None:
+            return b''
+        
+        # 如果缓冲区还有数据，用静音填充到完整帧
+        if len(self.pcm_buffer) > 0:
+            padding_needed = self.MP3_FRAME_SAMPLES - (len(self.pcm_buffer) % self.MP3_FRAME_SAMPLES)
+            if padding_needed < self.MP3_FRAME_SAMPLES:
+                self.pcm_buffer = np.concatenate([self.pcm_buffer, np.zeros(padding_needed, dtype=np.float32)])
+            
+            pcm_int16 = (self.pcm_buffer * 32767).astype(np.int16)
+            self.process.stdin.write(pcm_int16.tobytes())
+            self.pcm_buffer = np.array([], dtype=np.float32)
+        
+        # 关闭stdin触发编码器刷新
+        self.process.stdin.close()
+        
+        # 读取所有剩余输出
+        mp3_output = self.process.stdout.read()
+        self.process.wait()
+        
+        if mp3_output:
+            # 提取纯净帧，但跳过最后可能包含LAME标签的帧
+            clean_frames = self._extract_audio_frames(mp3_output, skip_last=True)
+            return clean_frames
+        
+        return b''
+    
+    def _extract_audio_frames(self, mp3_data, skip_last=False):
+        """
+        从MP3数据中提取纯净的音频帧
+        
+        Args:
+            mp3_data: 原始MP3数据
+            skip_last: 是否跳过最后一帧（可能包含LAME标签）
+        
+        Returns:
+            bytes: 纯净的MP3音频帧
+        """
+        if len(mp3_data) < 4:
+            return mp3_data
+        
+        data = bytes(mp3_data)
+        pos = 0
+        frames = []
+        
+        # 跳过ID3头部
+        if data[:3] == b'ID3' and len(data) >= 10:
+            id3_size = ((data[6] & 0x7F) << 21) | ((data[7] & 0x7F) << 14) | \
+                       ((data[8] & 0x7F) << 7) | (data[9] & 0x7F)
+            pos = 10 + id3_size
+        
+        while pos < len(data) - 4:
+            if data[pos] == 0xFF and (data[pos + 1] & 0xE0) == 0xE0:
+                header = (data[pos] << 24) | (data[pos + 1] << 16) | (data[pos + 2] << 8) | data[pos + 3]
+                
+                version = (header >> 19) & 0x03
+                layer = (header >> 17) & 0x03
+                bitrate_index = (header >> 12) & 0x0F
+                sample_rate_index = (header >> 10) & 0x03
+                padding = (header >> 9) & 0x01
+                
+                if layer == 0 or bitrate_index == 0 or bitrate_index == 15 or sample_rate_index == 3:
+                    pos += 1
+                    continue
+                
+                frame_length = calculate_mp3_frame_length(version, layer, bitrate_index, sample_rate_index, padding)
+                
+                if frame_length > 0 and pos + frame_length <= len(data):
+                    # 检查是否为Xing/Info/LAME元数据帧
+                    frame_content = data[pos:pos+200]
+                    if b'Xing' in frame_content or b'Info' in frame_content or b'LAME' in frame_content:
+                        pos += frame_length
+                        continue
+                    
+                    frames.append((pos, frame_length))
+                    pos += frame_length
+                else:
+                    pos += 1
+            else:
+                pos += 1
+        
+        # 如果需要跳过最后一帧
+        if skip_last and len(frames) > 0:
+            frames = frames[:-1]
+        
+        # 组装纯净帧
+        result = b''
+        for frame_pos, frame_len in frames:
+            result += data[frame_pos:frame_pos + frame_len]
+        
+        return result
+    
+    def close(self):
+        """关闭编码器"""
+        if self.process:
+            try:
+                self.process.stdin.close()
+                self.process.stdout.close()
+                self.process.stderr.close()
+                self.process.terminate()
+                self.process.wait(timeout=1)
+            except:
+                pass
+            self.process = None
+        print(f"[GaplessMP3] Encoder closed, total writes: {self.frames_written}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MeloTTS API Server')
