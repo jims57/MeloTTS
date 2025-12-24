@@ -2,8 +2,8 @@
 # Author: Jimmy Gan
 # Date: Dec 23, 2025
 # Melo TTS API Server
-# Version: 1.3.5
-# Changes number:39
+# Version: 1.3.6
+# Changes number:36
 # head -n 7 melo-api.py
 # cd ~/MeloTTS &&/root/MeloTTS/melotts/bin/python melo-api.py --port 9001
 """
@@ -13,6 +13,7 @@ import io
 import json
 import base64
 import argparse
+import sys
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -22,6 +23,10 @@ import time
 from melo.api import TTS
 import os
 import asyncio
+
+# 确保日志立即输出，不缓冲
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 # Valid API Keys for WebSocket authentication
 VALID_API_KEYS = {
@@ -165,6 +170,7 @@ async def websocket_tts(websocket: WebSocket):
             output_sample_rate = request_data.get("outputSampleRate", 22050)
             audio_format = request_data.get("audioFormat", "mp3")  # pcm or mp3
             language = request_data.get("language", "ZH")  # Extract language from JSON
+            chunk_duration = request_data.get("chunkDuration", 0.25)  # 客户端可控制MP3 chunk时长，默认0.25秒
             
             # 提取新增的消息标识参数
             start_time_id = request_data.get("startTimeId")
@@ -413,7 +419,7 @@ async def websocket_tts(websocket: WebSocket):
                             print(f"[WS-TTS] ✓ Segment {segment_idx+1}: No resampling needed (optimal)")
                         
                         # Stream segment audio in chunks
-                        chunk_duration = 1.0  # 1 second chunks
+                        # 使用客户端指定的chunk_duration，默认0.25秒
                         samples_per_chunk = int(output_sample_rate * chunk_duration)
                         
                         # Stream audio data in chunks immediately
