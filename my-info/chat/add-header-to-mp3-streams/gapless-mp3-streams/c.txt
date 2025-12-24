@@ -1,0 +1,30 @@
+{
+     "text": "青石板上泛着水光，雨丝斜斜地织着帘子。我撑一把油纸伞，踩着湿润的石板路，听脚步声在巷子里轻轻回响。",
+     "audioFormat":"mp3",
+     "saveAudioFiles":false,
+     "speakerId":1,
+     "outputSampleRate":16000,
+     "startTimeId":1752634809864,
+     "messageId":4     
+}
+
+
+{
+     "text": "青石板上泛着水光，雨丝斜斜地织着帘子。我撑一把油纸伞，踩着湿润的石板路，听脚步声在巷子里轻轻回响。",
+     "audioFormat":"mp3",
+     "saveAudioFiles":false,
+     "speakerId":1,
+     "outputSampleRate":16000
+}
+
+
+//>>chat 1
+very good, it has header info in each mp3 streams if i   post this @c.txt#L1-9 , that is good. now:
+a. i need to update   @melo-api.py about this mp3 case(audioFormat is mp3 @c.txt#L3 @c.txt#L14 ), i just need truly mp3 raw streams(i mean these mp3 streams should only have actual audio frame without any header, xing, padding, and last padding info etc.). i want the final these mp3 streams can be concatenated using binary level into a continuous streams after combining them(i mean we can play them smoothly and gaplesss)
+b. for better solution, you can reference other ai info @yb.txt 
+c. make sure keep other logic of mp3 intact
+
+
+//>>chat 2：
+a.it is no truly gapless mp3 streams, when i use android mp3 player demo @MainActivity.java to  play these mp3 streams, i can still hear giltch, though it is better than it was. I am sure the mp3 player demo android app is normal, for when i use the same demo to play minimax mp3 streams(truly raw mp3 streams) from our minimax api @api.py#L116-904 , it can play smooth and gapless
+b. the two @hex-3.txt@hex-4.txt are two of these mp3(note that the first 12 btyes: 00 00 01 98 11 2C DE 08 00 00 00 04 is normal header since we use @c.txt#L1-9 with @c.txt#L7-8 to post, which meet our use case). you found that these mp3 streams have AA AA or 55 55 in the end of these mp3 streams, which might be the reason why we cannot get gapless mp3 streams?

@@ -2,8 +2,8 @@
 # Author: Jimmy Gan
 # Date: Dec 23, 2025
 # Melo TTS API Server
-# Version: 1.3.4
-# Changes number: 2
+# Version: 1.3.5
+# Changes number:37
 # head -n 7 melo-api.py
 # cd ~/MeloTTS &&/root/MeloTTS/melotts/bin/python melo-api.py --port 9001
 """
@@ -536,17 +536,18 @@ async def websocket_tts(websocket: WebSocket):
                                         stderr=subprocess.PIPE
                                     )
                                     
-                                    # Convert to PCM data for FFmpeg
-                                    normalized_pcm = (normalized_audio * 32767).astype(np.int16)
+                                    # 将PCM数据对齐到1152样本（MP3帧大小），确保无缝拼接
+                                    aligned_audio = align_pcm_to_mp3_frame_size(normalized_audio, output_sample_rate)
+                                    normalized_pcm = (aligned_audio * 32767).astype(np.int16)
                                     mp3_data, error = process.communicate(input=normalized_pcm.tobytes())
                                     
                                     if process.returncode != 0:
                                         print(f"FFmpeg error: {error.decode()}")
                                         raise Exception("FFmpeg conversion failed")
                                     
-                                    # Trim MP3 padding for smoother playback
-                                    mp3_data = trim_mp3_padding(mp3_data)
-                                    print(f"[WS-TTS] MP3 conversion via FFmpeg successful")
+                                    # 提取纯净的MP3音频帧，用于无缝拼接
+                                    mp3_data = extract_raw_mp3_frames(mp3_data, skip_encoder_delay_frames=1)
+                                    print(f"[WS-TTS] MP3 conversion via FFmpeg successful, raw frames extracted")
                                     
                                 except Exception as ffmpeg_error:
                                     print(f"[WS-TTS] FFmpeg conversion failed: {str(ffmpeg_error)}")
@@ -667,63 +668,205 @@ async def websocket_tts(websocket: WebSocket):
     except Exception as e:
         print(f"[WS-TTS] WebSocket error: {str(e)}")
 
-def trim_mp3_padding(mp3_data):
-    """Remove padding bytes from the end of MP3 chunk to ensure clean frame boundaries"""
+def find_lame_tag_position(data):
+    """
+    查找LAME标签在数据中的位置
+    LAME编码器会在MP3数据末尾嵌入"LAME3.100"等标签，后面跟着填充字节
+    
+    Args:
+        data: MP3数据
+    
+    Returns:
+        LAME标签的位置，如果未找到则返回-1
+    """
+    # 搜索LAME标签
+    lame_pos = data.find(b'LAME')
+    if lame_pos != -1:
+        return lame_pos
+    
+    # 搜索Xing标签
+    xing_pos = data.find(b'Xing')
+    if xing_pos != -1:
+        return xing_pos
+    
+    # 搜索Info标签
+    info_pos = data.find(b'Info')
+    if info_pos != -1:
+        return info_pos
+    
+    return -1
+
+
+def extract_raw_mp3_frames(mp3_data, skip_encoder_delay_frames=1):
+    """
+    从MP3数据中提取纯净的音频帧，用于无缝拼接
+    - 跳过编码器延迟帧（LAME编码器通常在开头添加576样本的延迟）
+    - 只保留有效的MP3音频帧
+    - 移除所有非音频数据（ID3标签、Xing头、填充等）
+    - 截断LAME标签及其后的填充字节
+    
+    Args:
+        mp3_data: 原始MP3数据
+        skip_encoder_delay_frames: 跳过开头的帧数（用于处理编码器延迟）
+    
+    Returns:
+        纯净的MP3音频帧数据
+    """
     if len(mp3_data) < 4:
         return mp3_data
     
-    # Convert to bytearray for easier manipulation
-    data = bytearray(mp3_data)
-    original_length = len(data)
+    data = bytes(mp3_data)
     
-    # Look for repetitive padding patterns at the end
-    # Common MP3 padding patterns: 0x55, 0xAA, 0x00, etc.
-    padding_patterns = [0x55, 0xAA, 0x00]
-    
-    # Find the last non-padding byte
-    end_pos = len(data)
-    
-    for pattern in padding_patterns:
-        # Check if we have repetitive padding pattern at the end
-        consecutive_count = 0
-        pos = len(data) - 1
+    # 查找LAME标签位置，截断其后的所有数据
+    lame_pos = find_lame_tag_position(data)
+    if lame_pos != -1:
+        # 找到LAME标签所在的帧的起始位置
+        # 向前搜索最近的帧头
+        frame_start = lame_pos
+        while frame_start > 0:
+            if data[frame_start] == 0xFF and frame_start + 1 < len(data) and (data[frame_start + 1] & 0xE0) == 0xE0:
+                break
+            frame_start -= 1
         
-        # Count consecutive padding bytes from the end
-        while pos >= 0 and data[pos] == pattern:
-            consecutive_count += 1
-            pos -= 1
-        
-        # If we found significant padding (more than 16 consecutive bytes)
-        if consecutive_count > 16:
-            potential_end = pos + 1
-            if potential_end < end_pos:
-                end_pos = potential_end
-                print(f"[WS-TTS] Detected {consecutive_count} bytes of 0x{pattern:02X} padding, trimming to position {end_pos}")
+        # 截断到包含LAME标签的帧之前
+        if frame_start > 0:
+            data = data[:frame_start]
+            print(f"[WS-TTS] Truncated MP3 data at LAME tag position {lame_pos}, new length: {len(data)}")
     
-    # Additional check: look for MP3 frame sync patterns to avoid cutting in the middle of frames
-    # MP3 frame sync is 0xFFF (first 11 bits), so we look for 0xFF followed by 0xF*
-    if end_pos < original_length:
-        # Try to align to the last valid MP3 frame boundary
-        for i in range(end_pos - 1, max(0, end_pos - 100), -1):  # Look back up to 100 bytes
-            if i + 1 < len(data) and data[i] == 0xFF and (data[i + 1] & 0xF0) == 0xF0:
-                # Found potential MP3 frame sync, this might be a better cut point
-                # Look for the end of this frame
-                frame_start = i
-                # MP3 frame header is 4 bytes, try to find frame length
-                if frame_start + 4 <= len(data):
-                    # For now, just cut here as it's a frame boundary
-                    end_pos = min(end_pos, frame_start + 4)
-                    print(f"[WS-TTS] Aligned to MP3 frame boundary at position {end_pos}")
-                    break
+    frames = []
+    pos = 0
+    frame_count = 0
+    skipped_frames = 0
     
-    # Trim the data
-    trimmed_data = bytes(data[:end_pos])
+    while pos < len(data) - 4:
+        # 查找MP3帧同步字（0xFF后跟0xFB/0xFA/0xF3/0xF2等）
+        # MP3帧同步：前11位为1（0xFFE0或更高）
+        if data[pos] == 0xFF and (data[pos + 1] & 0xE0) == 0xE0:
+            # 解析MP3帧头
+            header = (data[pos] << 24) | (data[pos + 1] << 16) | (data[pos + 2] << 8) | data[pos + 3]
+            
+            # 提取帧头信息
+            version = (header >> 19) & 0x03  # MPEG版本
+            layer = (header >> 17) & 0x03    # Layer
+            bitrate_index = (header >> 12) & 0x0F
+            sample_rate_index = (header >> 10) & 0x03
+            padding = (header >> 9) & 0x01
+            
+            # 验证帧头有效性
+            if layer == 0 or bitrate_index == 0 or bitrate_index == 15 or sample_rate_index == 3:
+                pos += 1
+                continue
+            
+            # 计算帧长度
+            frame_length = calculate_mp3_frame_length(version, layer, bitrate_index, sample_rate_index, padding)
+            
+            if frame_length > 0 and pos + frame_length <= len(data):
+                # 跳过编码器延迟帧
+                if skipped_frames < skip_encoder_delay_frames:
+                    skipped_frames += 1
+                    pos += frame_length
+                    continue
+                
+                # 提取帧数据
+                frame_data = data[pos:pos + frame_length]
+                
+                # 保存有效帧
+                frames.append(frame_data)
+                frame_count += 1
+                pos += frame_length
+            else:
+                pos += 1
+        else:
+            pos += 1
     
-    if end_pos < original_length:
-        bytes_removed = original_length - end_pos
-        print(f"[WS-TTS] Trimmed {bytes_removed} padding bytes from MP3 chunk ({original_length} -> {end_pos} bytes)")
+    if frame_count > 0:
+        print(f"[WS-TTS] Extracted {frame_count} MP3 frames, skipped {skipped_frames} delay frames")
     
-    return trimmed_data
+    return b''.join(frames)
+
+
+def calculate_mp3_frame_length(version, layer, bitrate_index, sample_rate_index, padding):
+    """
+    计算MP3帧长度
+    
+    Args:
+        version: MPEG版本 (0=2.5, 2=2, 3=1)
+        layer: Layer (1=III, 2=II, 3=I)
+        bitrate_index: 比特率索引
+        sample_rate_index: 采样率索引
+        padding: 填充位
+    
+    Returns:
+        帧长度（字节）
+    """
+    # 比特率表（kbps）
+    # MPEG-1 Layer III
+    bitrate_table_v1_l3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0]
+    # MPEG-2/2.5 Layer III
+    bitrate_table_v2_l3 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0]
+    
+    # 采样率表（Hz）
+    sample_rate_table = {
+        3: [44100, 48000, 32000],  # MPEG-1
+        2: [22050, 24000, 16000],  # MPEG-2
+        0: [11025, 12000, 8000]    # MPEG-2.5
+    }
+    
+    # 获取比特率
+    if version == 3:  # MPEG-1
+        bitrate = bitrate_table_v1_l3[bitrate_index] * 1000
+    else:  # MPEG-2 or MPEG-2.5
+        bitrate = bitrate_table_v2_l3[bitrate_index] * 1000
+    
+    # 获取采样率
+    if version not in sample_rate_table:
+        return 0
+    if sample_rate_index >= len(sample_rate_table[version]):
+        return 0
+    sample_rate = sample_rate_table[version][sample_rate_index]
+    
+    if bitrate == 0 or sample_rate == 0:
+        return 0
+    
+    # Layer III帧长度计算公式
+    # 对于MPEG-1: frame_length = 144 * bitrate / sample_rate + padding
+    # 对于MPEG-2/2.5: frame_length = 72 * bitrate / sample_rate + padding
+    if version == 3:  # MPEG-1
+        frame_length = (144 * bitrate) // sample_rate + padding
+    else:  # MPEG-2 or MPEG-2.5
+        frame_length = (72 * bitrate) // sample_rate + padding
+    
+    return frame_length
+
+
+def align_pcm_to_mp3_frame_size(pcm_samples, sample_rate):
+    """
+    将PCM样本数对齐到MP3帧大小（1152样本）
+    这是实现无缝MP3拼接的关键
+    
+    Args:
+        pcm_samples: PCM样本数组
+        sample_rate: 采样率
+    
+    Returns:
+        对齐后的PCM样本数组
+    """
+    # MP3帧包含1152个样本（MPEG-1 Layer III）
+    MP3_FRAME_SAMPLES = 1152
+    
+    current_samples = len(pcm_samples)
+    
+    # 计算需要的样本数（向上取整到1152的整数倍）
+    aligned_samples = ((current_samples + MP3_FRAME_SAMPLES - 1) // MP3_FRAME_SAMPLES) * MP3_FRAME_SAMPLES
+    
+    if aligned_samples > current_samples:
+        # 添加静音样本进行填充
+        padding_samples = aligned_samples - current_samples
+        padded_pcm = np.concatenate([pcm_samples, np.zeros(padding_samples, dtype=pcm_samples.dtype)])
+        print(f"[WS-TTS] Aligned PCM from {current_samples} to {aligned_samples} samples (+{padding_samples} padding)")
+        return padded_pcm
+    
+    return pcm_samples
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MeloTTS API Server')
