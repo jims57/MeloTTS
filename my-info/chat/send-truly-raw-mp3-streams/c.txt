@@ -1,0 +1,22 @@
+ws://153.228.44.233:58244/tts
+{
+     "text": "青石板上泛着水光，雨丝斜斜地织着帘子。我撑一把油纸伞，踩着湿润的石板路，听脚步声在巷子里轻轻回响。",
+     "audioFormat":"mp3",
+     "saveAudioFiles":false,
+     "speakerId":1,
+     "outputSampleRate":16000
+}
+
+
+// >>chat 1
+see @melo-api.py 
+a. update /tts ws in @melo-api.py to  send truly raw mp3 stream without header info and xing info etc. when audioFormat is mp3 like this @c.txt#L4 
+b. based on item a, i mean i only need to send truly mp3 audio data,  just having the audio frames.
+c. you can reference this info from other ai, @ai.txt   , fyi
+d. you should pay attention to this @ai.txt#L146 @ai.txt#L30  , since we need all these mp3 streams are smooth(i mean if i concatenate them in order by binary level, the combined mp3 file can be played smoothly withou any giltch, like it was a integral mp3 file which has no any header, xing etc.)
+e. though this @ai.txt#L36 , we do need send each raw mp3 stream immediately after it is converted from pcm chunk. the immediate sending of raw mp3 strams is our product requirement
+
+// >>chat 2
+a.i found a noticeable delay when the first mp3 streams arrive to clients which is different from our old code @melo-api%20copy.py  for this part 
+b. i use this android app which is normal when use this old api code @melo-api%20copy.py  to play these mp3 streams, but now it can only play these(世界是一幅由无数不同色彩的丝线编织而成的挂毯，每一根丝线都为存在的), but no this (整体复杂性和美丽贡献着力量。), i am sure the android app can play all @MainActivity.java#L425 if using old api @melo-api%20copy.py , so i think it might be related with @melo-api.py 
+c. again, for the problem in item a, we do need immediate mp3 strams sent to client, but now it isn't.

@@ -2,12 +2,9 @@
 # Author: Jimmy Gan
 # Date: Dec 23, 2025
 # Melo TTS API Server
-# Version: 1.3.10
-# Changes number: 9
-# head -n 7 melo-api.py
-# cd ~/MeloTTS &&/root/MeloTTS/melotts/bin/python melo-api.py --port 9001
+# Version: 1.3.3
+# Changes number: 2
 """
-
 import torch
 import numpy as np
 import io
@@ -357,12 +354,6 @@ async def websocket_tts(websocket: WebSocket):
                 first_chunk_sent_since_request = None
                 chunk_counter = 0
                 
-                # MP3 frame sample buffering for gapless streaming
-                # MPEG2 Layer3 at 16kHz uses 576 samples per frame
-                # We buffer PCM samples and only encode complete frames
-                mp3_pcm_buffer = np.array([], dtype=np.float32)
-                MP3_SAMPLES_PER_FRAME = 576  # For MPEG2 Layer3
-                
                 # Process each text segment immediately
                 for segment_idx, segment_text in enumerate(text_segments):
                     segment_start_time = time.time()
@@ -489,106 +480,99 @@ async def websocket_tts(websocket: WebSocket):
                                 print(f"[WS-TTS] Send time: {chunk_processing_time:.2f}ms")
                                 
                             elif audio_format.lower() == "mp3":
-                                # Gapless MP3 streaming with exact frame boundaries
-                                # Buffer PCM samples and only encode complete MP3 frames
+                                # Convert chunk to MP3 with fallback when FFmpeg is not available
                                 import soundfile as sf
-                                import subprocess
-                                import shutil
                                 
                                 # Check if audio is valid
                                 if len(audio_chunk) == 0 or np.isnan(audio_chunk).any():
                                     continue
                                 
-                                # Volume adjustment
+                                # Normalize audio to increase volume before writing to MP3
                                 volume_multiplier = 2.0
+                                # Apply higher volume for Chinese language MP3
                                 if language == "ZH":
-                                    volume_multiplier = 8.47  # +13dB for Chinese
+                                    volume_multiplier = 8.47  # Equivalent to 13dB increase
                                     
+                                # Log volume multiplier value
                                 print(f"Volume multiplier: {volume_multiplier:.1f}")
                                     
                                 normalized_audio = audio_chunk * volume_multiplier
+                                # Clip to avoid distortion
                                 normalized_audio = np.clip(normalized_audio, -1.0, 1.0)
                                 
-                                # Add current chunk to PCM buffer
-                                mp3_pcm_buffer = np.concatenate([mp3_pcm_buffer, normalized_audio])
-                                
-                                # Calculate how many complete MP3 frames we can encode
-                                num_complete_frames = len(mp3_pcm_buffer) // MP3_SAMPLES_PER_FRAME
-                                if num_complete_frames == 0:
-                                    # Not enough samples for a complete frame, wait for more
-                                    print(f"[WS-TTS] Buffering {len(mp3_pcm_buffer)} samples, need {MP3_SAMPLES_PER_FRAME} for a frame")
-                                    continue
-                                
-                                # Extract only complete frames worth of samples
-                                samples_to_encode = num_complete_frames * MP3_SAMPLES_PER_FRAME
-                                audio_to_encode = mp3_pcm_buffer[:samples_to_encode]
-                                
-                                # Keep remaining samples in buffer for next chunk
-                                mp3_pcm_buffer = mp3_pcm_buffer[samples_to_encode:]
-                                print(f"[WS-TTS] Encoding {samples_to_encode} samples ({num_complete_frames} frames), {len(mp3_pcm_buffer)} samples buffered")
-                                
+                                # Try FFmpeg first, fallback to soundfile if FFmpeg not available
                                 mp3_data = None
                                 try:
+                                    import subprocess
+                                    import shutil
+                                    
+                                    # Check if ffmpeg is available
                                     if shutil.which('ffmpeg') is None:
                                         raise FileNotFoundError("FFmpeg not found")
                                     
-                                    # FFmpeg with CBR encoding
+                                    # Use FFmpeg to convert WAV to MP3 with optimized settings
                                     process = subprocess.Popen(
                                         [
                                             'ffmpeg',
-                                            '-f', 's16le',
-                                            '-ar', str(output_sample_rate),
-                                            '-ac', '1',
-                                            '-i', 'pipe:0',
-                                            '-c:a', 'libmp3lame',
-                                            '-b:a', '128k',  # CBR 128kbps
-                                            '-write_xing', '0',  # No Xing header
+                                            '-f', 's16le',  # 16-bit little-endian PCM
+                                            '-ar', str(output_sample_rate),  # Input sample rate
+                                            '-ac', '1',  # Mono
+                                            '-i', 'pipe:0',  # Read from stdin
+                                            '-c:a', 'libmp3lame',  # MP3 encoder
+                                            '-b:a', '128k',  # 128 kbps
+                                            '-q:a', '2',  # Quality setting
+                                            '-write_id3v1', '0',  # No ID3v1
+                                            '-write_id3v2', '0',  # No ID3v2
                                             '-id3v2_version', '0',  # No ID3v2
-                                            '-reservoir', '0',  # Disable bit reservoir
-                                            '-f', 'mp3',
-                                            'pipe:1'
+                                            '-write_xing', '0',  # No Xing header
+                                            '-fflags', '+bitexact',
+                                            '-f', 'mp3',  # MP3 format
+                                            'pipe:1'  # Output to stdout
                                         ],
                                         stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE
                                     )
                                     
-                                    # Convert to PCM (exact frame-aligned samples)
-                                    normalized_pcm = (audio_to_encode * 32767).astype(np.int16)
+                                    # Convert to PCM data for FFmpeg
+                                    normalized_pcm = (normalized_audio * 32767).astype(np.int16)
                                     mp3_data, error = process.communicate(input=normalized_pcm.tobytes())
                                     
                                     if process.returncode != 0:
                                         print(f"FFmpeg error: {error.decode()}")
                                         raise Exception("FFmpeg conversion failed")
                                     
-                                    # Strip any remaining LAME artifacts
-                                    mp3_data = strip_lame_padding(mp3_data)
-                                    
-                                    print(f"[WS-TTS] Raw MP3 frames: {len(mp3_data)} bytes")
+                                    # Trim MP3 padding for smoother playback
+                                    mp3_data = trim_mp3_padding(mp3_data)
+                                    print(f"[WS-TTS] MP3 conversion via FFmpeg successful")
                                     
                                 except Exception as ffmpeg_error:
-                                    print(f"[WS-TTS] FFmpeg error: {str(ffmpeg_error)}")
-                                    print(f"[WS-TTS] Falling back to WAV for chunk {chunk_counter}")
+                                    print(f"[WS-TTS] FFmpeg conversion failed: {str(ffmpeg_error)}")
+                                    print(f"[WS-TTS] Falling back to WAV format for chunk {chunk_counter}")
                                     
+                                    # Fallback: send as WAV format
                                     try:
                                         wav_io = io.BytesIO()
                                         sf.write(wav_io, normalized_audio, output_sample_rate, format="WAV")
                                         mp3_data = wav_io.getvalue()
                                         wav_io.close()
-                                        print(f"[WS-TTS] WAV fallback successful")
+                                        print(f"[WS-TTS] WAV fallback conversion successful")
                                     except Exception as wav_error:
-                                        print(f"[WS-TTS] WAV fallback failed: {str(wav_error)}")
+                                        print(f"[WS-TTS] WAV fallback also failed: {str(wav_error)}")
                                         continue
                                 
                                 if mp3_data:
+                                    # Send MP3/WAV chunk immediately
                                     await websocket.send_bytes(mp3_data)
                                     
+                                    # Track first chunk sent timing
                                     if not first_chunk_sent:
                                         first_chunk_sent_time = time.time()
                                         first_chunk_sent_since_request = (first_chunk_sent_time - start_time) * 1000
-                                        print(f"[WS-TTS] First chunk sent: {first_chunk_sent_since_request:.2f}ms")
+                                        print(f"[WS-TTS] 🎯 First chunk sent since request: {first_chunk_sent_since_request:.2f}ms")
                                         first_chunk_sent = True
                                     
+                                    # Save MP3 chunk if requested
                                     if save_audio_files and chunk_save_folder:
                                         chunk_filename = f"chunk_{chunk_counter}.mp3"
                                         chunk_filepath = os.path.join(chunk_save_folder, chunk_filename)
@@ -597,10 +581,10 @@ async def websocket_tts(websocket: WebSocket):
                                                 f.write(mp3_data)
                                             print(f"[WS-TTS] Saved {chunk_filename} ({len(mp3_data)} bytes)")
                                         except Exception as save_error:
-                                            print(f"[WS-TTS] Error saving chunk: {save_error}")
+                                            print(f"[WS-TTS] Error saving chunk file: {save_error}")
                                     
                                     chunk_processing_time = (time.time() - chunk_start_time) * 1000
-                                    print(f"[WS-TTS] MP3 chunk {chunk_counter}: {len(mp3_data)} bytes, {chunk_processing_time:.2f}ms")
+                                    print(f"[WS-TTS] 📦 MP3 chunk {chunk_counter} sent: {len(mp3_data)} bytes, time: {chunk_processing_time:.2f}ms")
                             
                             else:
                                 await websocket.send_text(json.dumps({"error": f"Unsupported audio format: {audio_format}"}))
@@ -615,45 +599,6 @@ async def websocket_tts(websocket: WebSocket):
                     except Exception as segment_error:
                         print(f"Error processing segment {segment_idx+1}: {str(segment_error)}")
                         continue
-                
-                # Flush remaining MP3 buffer if any samples left (for MP3 format only)
-                if audio_format.lower() == "mp3" and len(mp3_pcm_buffer) > 0:
-                    print(f"[WS-TTS] Flushing remaining {len(mp3_pcm_buffer)} samples from buffer")
-                    import subprocess
-                    import shutil
-                    
-                    try:
-                        if shutil.which('ffmpeg') is not None:
-                            process = subprocess.Popen(
-                                [
-                                    'ffmpeg',
-                                    '-f', 's16le',
-                                    '-ar', str(output_sample_rate),
-                                    '-ac', '1',
-                                    '-i', 'pipe:0',
-                                    '-c:a', 'libmp3lame',
-                                    '-b:a', '128k',
-                                    '-write_xing', '0',
-                                    '-id3v2_version', '0',
-                                    '-reservoir', '0',
-                                    '-f', 'mp3',
-                                    'pipe:1'
-                                ],
-                                stdin=subprocess.PIPE,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE
-                            )
-                            
-                            final_pcm = (mp3_pcm_buffer * 32767).astype(np.int16)
-                            final_mp3, _ = process.communicate(input=final_pcm.tobytes())
-                            
-                            if process.returncode == 0 and len(final_mp3) > 0:
-                                final_mp3 = strip_lame_padding(final_mp3)
-                                await websocket.send_bytes(final_mp3)
-                                chunk_counter += 1
-                                print(f"[WS-TTS] Final MP3 chunk: {len(final_mp3)} bytes")
-                    except Exception as flush_error:
-                        print(f"[WS-TTS] Error flushing buffer: {flush_error}")
                 
                 # Log completion
                 generation_time = time.time() - start_time
@@ -704,100 +649,63 @@ async def websocket_tts(websocket: WebSocket):
     except Exception as e:
         print(f"[WS-TTS] WebSocket error: {str(e)}")
 
-def strip_lame_padding(mp3_data):
-    """
-    Strip trailing padding from MP3 data to get exact frame boundaries.
-    Returns only complete, valid MP3 frames.
-    """
+def trim_mp3_padding(mp3_data):
+    """Remove padding bytes from the end of MP3 chunk to ensure clean frame boundaries"""
     if len(mp3_data) < 4:
         return mp3_data
     
+    # Convert to bytearray for easier manipulation
     data = bytearray(mp3_data)
+    original_length = len(data)
     
-    # Parse all valid MP3 frames and collect their boundaries
-    valid_frames = []
-    pos = 0
+    # Look for repetitive padding patterns at the end
+    # Common MP3 padding patterns: 0x55, 0xAA, 0x00, etc.
+    padding_patterns = [0x55, 0xAA, 0x00]
     
-    while pos < len(data) - 4:
-        # Look for frame sync: 0xFF followed by 0xEx or 0xFx (11 sync bits)
-        if data[pos] == 0xFF and (data[pos + 1] & 0xE0) == 0xE0:
-            # Parse frame header
-            header = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3]
-            
-            version = (header >> 19) & 0x03
-            layer = (header >> 17) & 0x03
-            bitrate_idx = (header >> 12) & 0x0F
-            srate_idx = (header >> 10) & 0x03
-            padding_bit = (header >> 9) & 0x01
-            
-            # Skip invalid combinations
-            if layer == 0 or bitrate_idx == 0 or bitrate_idx == 15 or srate_idx == 3:
-                pos += 1
-                continue
-            
-            # Bitrate tables for Layer III
-            bitrates_v1_l3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0]
-            bitrates_v2_l3 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0]
-            
-            # Sample rate tables
-            srates_v1 = [44100, 48000, 32000, 0]
-            srates_v2 = [22050, 24000, 16000, 0]
-            srates_v25 = [11025, 12000, 8000, 0]
-            
-            # Calculate frame size based on version
-            if version == 3:  # MPEG1
-                bitrate = bitrates_v1_l3[bitrate_idx] * 1000
-                srate = srates_v1[srate_idx]
-                frame_size = (144 * bitrate // srate) + padding_bit
-            elif version == 2:  # MPEG2
-                bitrate = bitrates_v2_l3[bitrate_idx] * 1000
-                srate = srates_v2[srate_idx]
-                frame_size = (72 * bitrate // srate) + padding_bit
-            elif version == 0:  # MPEG2.5
-                bitrate = bitrates_v2_l3[bitrate_idx] * 1000
-                srate = srates_v25[srate_idx]
-                frame_size = (72 * bitrate // srate) + padding_bit
-            else:
-                pos += 1
-                continue
-            
-            if bitrate > 0 and srate > 0 and frame_size > 0:
-                # Verify we have enough data for this frame
-                if pos + frame_size <= len(data):
-                    valid_frames.append((pos, frame_size))
-                    pos += frame_size
-                    continue
-            
-        pos += 1
+    # Find the last non-padding byte
+    end_pos = len(data)
     
-    if not valid_frames:
-        return mp3_data
-    
-    # Reconstruct MP3 data from valid frames only
-    result = bytearray()
-    num_frames = len(valid_frames)
-    
-    for i, (frame_pos, frame_size) in enumerate(valid_frames):
-        frame_data = data[frame_pos:frame_pos + frame_size]
+    for pattern in padding_patterns:
+        # Check if we have repetitive padding pattern at the end
+        consecutive_count = 0
+        pos = len(data) - 1
         
-        # For the last frame, trim trailing null bytes
-        if i == num_frames - 1:
-            # Find the last non-null byte in the frame (keep at least header + some data)
-            min_keep = 32  # Keep at least 32 bytes (header + side info)
-            end_pos = len(frame_data)
-            while end_pos > min_keep and frame_data[end_pos - 1] == 0x00:
-                end_pos -= 1
-            frame_data = frame_data[:end_pos]
+        # Count consecutive padding bytes from the end
+        while pos >= 0 and data[pos] == pattern:
+            consecutive_count += 1
+            pos -= 1
         
-        result.extend(frame_data)
+        # If we found significant padding (more than 16 consecutive bytes)
+        if consecutive_count > 16:
+            potential_end = pos + 1
+            if potential_end < end_pos:
+                end_pos = potential_end
+                print(f"[WS-TTS] Detected {consecutive_count} bytes of 0x{pattern:02X} padding, trimming to position {end_pos}")
     
-    # Log if we removed any data
-    original_size = sum(fs for _, fs in valid_frames)
-    removed = original_size - len(result)
-    if removed > 0:
-        print(f"[WS-TTS] Trimmed {removed} bytes of null padding from last frame")
+    # Additional check: look for MP3 frame sync patterns to avoid cutting in the middle of frames
+    # MP3 frame sync is 0xFFF (first 11 bits), so we look for 0xFF followed by 0xF*
+    if end_pos < original_length:
+        # Try to align to the last valid MP3 frame boundary
+        for i in range(end_pos - 1, max(0, end_pos - 100), -1):  # Look back up to 100 bytes
+            if i + 1 < len(data) and data[i] == 0xFF and (data[i + 1] & 0xF0) == 0xF0:
+                # Found potential MP3 frame sync, this might be a better cut point
+                # Look for the end of this frame
+                frame_start = i
+                # MP3 frame header is 4 bytes, try to find frame length
+                if frame_start + 4 <= len(data):
+                    # For now, just cut here as it's a frame boundary
+                    end_pos = min(end_pos, frame_start + 4)
+                    print(f"[WS-TTS] Aligned to MP3 frame boundary at position {end_pos}")
+                    break
     
-    return bytes(result)
+    # Trim the data
+    trimmed_data = bytes(data[:end_pos])
+    
+    if end_pos < original_length:
+        bytes_removed = original_length - end_pos
+        print(f"[WS-TTS] Trimmed {bytes_removed} padding bytes from MP3 chunk ({original_length} -> {end_pos} bytes)")
+    
+    return trimmed_data
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MeloTTS API Server')
