@@ -51,7 +51,7 @@ def main():
     output_wav_path = os.path.join(combined_wav_dir, "combined_audio.wav")
     
     print("正在将所有PCM块合并为单个WAV文件...")
-    combine_pcm_to_wav(pcm_chunks_dir, output_wav_path, sample_rate=6000, channels=1)
+    combine_pcm_to_wav(pcm_chunks_dir, output_wav_path, sample_rate=8000, channels=1)
     print(f"合并的WAV文件已保存: {output_wav_path}")
 
 if __name__ == "__main__":
